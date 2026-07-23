@@ -1,0 +1,422 @@
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Foodingo Data Engineering Pipeline — Local Docker Compose
+#
+#  Services & Ports:
+#    MongoDB (Replica Set)   : 27017   ← Spring Boot connects here (local dev)
+#    Zookeeper               : 2181
+#    Kafka                   : 9092 (internal) / 9094 (external from host)
+#    Schema Registry         : 8081
+#    Kafka Connect (Debezium): 8083
+#    Kafka UI                : 8090   → http://localhost:8090
+#    MinIO (local S3)        : 9000 (API) / 9001 (console)
+#    PostgreSQL (warehouse)  : 5432
+#    Kafka Consumer (Python) : —
+#    ML Service (FastAPI)    : 5001   → http://localhost:5001/docs
+#    Airflow Webserver       : 8089   → http://localhost:8089  (admin/admin)
+#    Metabase (BI)           : 3000   → http://localhost:3000
+#
+#  USAGE:
+#    docker compose -f docker-compose-pipeline.yml up -d
+#    See README.md for full setup & migration guide
+# ═══════════════════════════════════════════════════════════════════════════════
+
+networks:
+  foodingo-pipeline:
+    driver: bridge
+
+volumes:
+  mongo-data:
+  postgres-data:
+  minio-data:
+  airflow-logs:
+  airflow-db-data:
+
+# ─── MONGODB (LOCAL REPLICA SET — enables Debezium CDC) ─────────────────────
+services:
+  mongodb:
+    image: mongo:7.0
+    container_name: foodingo-mongodb
+    hostname: mongodb
+    command: mongod --replSet rs0 --bind_ip_all --port 27017
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+    networks:
+      - foodingo-pipeline
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  # One-shot container that initialises the replica set after MongoDB is healthy
+  mongodb-rs-init:
+    image: mongo:7.0
+    container_name: foodingo-mongodb-rs-init
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    volumes:
+      - ./mongodb/init-replica-set.js:/init-replica-set.js:ro
+    command: >
+      mongosh --host mongodb:27017 --eval 'try { rs.status(); } catch(e) { rs.initiate({_id: "rs0", members: [{_id: 0, host: "mongodb:27017"}]}) }'
+    networks:
+      - foodingo-pipeline
+    restart: "no"
+
+# ─── ZOOKEEPER ────────────────────────────────────────────────────────────────
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.1
+    container_name: foodingo-zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+    networks:
+      - foodingo-pipeline
+    healthcheck:
+      test: nc -z localhost 2181
+      interval: 10s
+      retries: 5
+
+# ─── KAFKA ────────────────────────────────────────────────────────────────────
+  kafka:
+    image: confluentinc/cp-kafka:7.6.1
+    container_name: foodingo-kafka
+    hostname: kafka
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    ports:
+      - "9092:9092"   # internal (used by Docker services: Debezium, consumer, ML)
+      - "9094:9094"   # external (used by Spring Boot on host machine)
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENERS: INTERNAL://0.0.0.0:9092,EXTERNAL://0.0.0.0:9094
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9092,EXTERNAL://localhost:9094
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+    networks:
+      - foodingo-pipeline
+    healthcheck:
+      test: kafka-topics --bootstrap-server localhost:9092 --list
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  # Auto-creates all Kafka topics on startup
+  kafka-init:
+    image: confluentinc/cp-kafka:7.6.1
+    container_name: foodingo-kafka-init
+    depends_on:
+      kafka:
+        condition: service_healthy
+    volumes:
+      - ./kafka/init-topics.sh:/init-topics.sh:ro
+    entrypoint: ["/bin/bash", "/init-topics.sh"]
+    networks:
+      - foodingo-pipeline
+    restart: "no"
+
+# ─── SCHEMA REGISTRY ──────────────────────────────────────────────────────────
+  schema-registry:
+    image: confluentinc/cp-schema-registry:7.6.1
+    container_name: foodingo-schema-registry
+    depends_on:
+      kafka:
+        condition: service_healthy
+    ports:
+      - "8081:8081"
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: kafka:9092
+    networks:
+      - foodingo-pipeline
+    healthcheck:
+      test: curl -f http://localhost:8081/subjects
+      interval: 10s
+      retries: 5
+      start_period: 20s
+
+# ─── KAFKA CONNECT + DEBEZIUM (MongoDB CDC) ───────────────────────────────────
+  kafka-connect:
+    image: debezium/connect:2.5
+    container_name: foodingo-kafka-connect
+    depends_on:
+      kafka:
+        condition: service_healthy
+      schema-registry:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+      mongodb-rs-init:
+        condition: service_completed_successfully
+    ports:
+      - "8083:8083"
+    environment:
+      BOOTSTRAP_SERVERS: kafka:9092
+      GROUP_ID: foodingo-connect-group
+      CONFIG_STORAGE_TOPIC: foodingo_connect_configs
+      OFFSET_STORAGE_TOPIC: foodingo_connect_offsets
+      STATUS_STORAGE_TOPIC: foodingo_connect_statuses
+      CONNECT_KEY_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      CONNECT_VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      CONNECT_KEY_CONVERTER_SCHEMAS_ENABLE: "false"
+      CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
+    networks:
+      - foodingo-pipeline
+    healthcheck:
+      test: curl -f http://localhost:8083/connectors
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+
+  # Registers the Debezium MongoDB connector after Connect is healthy
+  debezium-init:
+    image: curlimages/curl:latest
+    container_name: foodingo-debezium-init
+    depends_on:
+      kafka-connect:
+        condition: service_healthy
+    volumes:
+      - ./debezium/mongodb-connector.json:/mongodb-connector.json:ro
+    command: >
+      curl -f -X POST http://kafka-connect:8083/connectors
+      -H "Content-Type: application/json"
+      -d @/mongodb-connector.json
+    networks:
+      - foodingo-pipeline
+    restart: "no"
+
+# ─── KAFKA UI ─────────────────────────────────────────────────────────────────
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: foodingo-kafka-ui
+    depends_on:
+      - kafka
+    ports:
+      - "8090:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: foodingo-local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+      KAFKA_CLUSTERS_0_SCHEMAREGISTRY: http://schema-registry:8081
+    networks:
+      - foodingo-pipeline
+
+# ─── MINIO (LOCAL S3 — mirrors real foodingo-data-lake bucket) ────────────────
+  minio:
+    image: minio/minio:latest
+    container_name: foodingo-minio
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: foodingo
+      MINIO_ROOT_PASSWORD: foodingo123
+    volumes:
+      - minio-data:/data
+    networks:
+      - foodingo-pipeline
+    healthcheck:
+      test: curl -f http://localhost:9000/minio/health/live
+      interval: 10s
+      retries: 5
+
+  minio-init:
+    image: minio/mc:latest
+    container_name: foodingo-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    volumes:
+      - ./minio/init-buckets.sh:/init-buckets.sh:ro
+    entrypoint: ["/bin/sh", "/init-buckets.sh"]
+    networks:
+      - foodingo-pipeline
+    restart: "no"
+
+# ─── POSTGRESQL (DATA WAREHOUSE) ──────────────────────────────────────────────
+  postgres:
+    image: postgres:15-alpine
+    container_name: foodingo-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: foodingo
+      POSTGRES_PASSWORD: foodingo123
+      POSTGRES_DB: foodingo_warehouse
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    networks:
+      - foodingo-pipeline
+    healthcheck:
+      test: pg_isready -U foodingo -d foodingo_warehouse
+      interval: 10s
+      retries: 5
+
+# ─── PYTHON KAFKA CONSUMER (Kafka → PostgreSQL + MinIO) ──────────────────────
+  kafka-consumer:
+    build:
+      context: ./kafka-consumer
+      dockerfile: Dockerfile
+    container_name: foodingo-kafka-consumer
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+    env_file:
+      - ../.env
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: foodingo_warehouse
+      POSTGRES_USER: foodingo
+      POSTGRES_PASSWORD: foodingo123
+      MINIO_ENDPOINT: https://s3.us-east-1.amazonaws.com
+      MINIO_ACCESS_KEY: ${AWS_ACCESS_KEY}
+      MINIO_SECRET_KEY: ${AWS_SECRET_KEY}
+      MINIO_BUCKET: ${AWS_DATALAKE_BUCKET}
+    networks:
+      - foodingo-pipeline
+    restart: unless-stopped
+
+# ─── ML SERVICE (FastAPI — Recommendations + Churn) ──────────────────────────
+  ml-service:
+    build:
+      context: ./ml-service
+      dockerfile: Dockerfile
+    container_name: foodingo-ml-service
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "5001:5001"
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: foodingo_warehouse
+      POSTGRES_USER: foodingo
+      POSTGRES_PASSWORD: foodingo123
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: foodingo
+      MINIO_SECRET_KEY: foodingo123
+      MINIO_BUCKET: foodingo-data-lake
+    networks:
+      - foodingo-pipeline
+    restart: unless-stopped
+
+# ─── AIRFLOW DB (metadata for Airflow) ───────────────────────────────────────
+  airflow-db:
+    image: postgres:15-alpine
+    container_name: foodingo-airflow-db
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - airflow-db-data:/var/lib/postgresql/data
+    networks:
+      - foodingo-pipeline
+    healthcheck:
+      test: pg_isready -U airflow
+      interval: 10s
+      retries: 5
+
+  airflow-init:
+    image: apache/airflow:2.9.1-python3.11
+    container_name: foodingo-airflow-init
+    depends_on:
+      airflow-db:
+        condition: service_healthy
+    environment:
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-db/airflow
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    command: >
+      bash -c "
+        airflow db migrate &&
+        airflow users create --username admin --password admin --firstname Admin --lastname Foodingo --role Admin --email admin@foodingo.com
+      "
+    networks:
+      - foodingo-pipeline
+    restart: "no"
+
+  airflow-webserver:
+    image: apache/airflow:2.9.1-python3.11
+    container_name: foodingo-airflow-webserver
+    command: webserver
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    ports:
+      - "8089:8080"     # Mapped to 8089 to avoid conflict with Spring Boot :8080
+    environment:
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-db/airflow
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__WEBSERVER__SECRET_KEY: foodingo-secret-key
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - airflow-logs:/opt/airflow/logs
+    networks:
+      - foodingo-pipeline
+    healthcheck:
+      test: curl -f http://localhost:8080/health
+      interval: 30s
+      retries: 5
+      start_period: 60s
+
+  airflow-scheduler:
+    image: apache/airflow:2.9.1-python3.11
+    container_name: foodingo-airflow-scheduler
+    command: scheduler
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    environment:
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-db/airflow
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - airflow-logs:/opt/airflow/logs
+    networks:
+      - foodingo-pipeline
+    restart: unless-stopped
+
+# ─── METABASE (BI DASHBOARDS) ─────────────────────────────────────────────────
+  metabase:
+    image: metabase/metabase:latest
+    container_name: foodingo-metabase
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    environment:
+      MB_DB_TYPE: postgres
+      MB_DB_DBNAME: foodingo_warehouse
+      MB_DB_PORT: 5432
+      MB_DB_USER: foodingo
+      MB_DB_PASS: foodingo123
+      MB_DB_HOST: postgres
+    networks:
+      - foodingo-pipeline

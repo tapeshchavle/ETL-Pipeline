@@ -1,0 +1,21 @@
+{
+  "name": "foodingo-mongodb-connector",
+  "config": {
+    "connector.class": "io.debezium.connector.mongodb.MongoDbConnector",
+    "mongodb.connection.string": "mongodb://mongodb:27017/?replicaSet=rs0",
+    "mongodb.name": "foodingo",
+    "database.include.list": "foodies",
+    "collection.include.list": "foodies.orders,foodies.users,foodies.food,foodies.carts",
+    "topic.prefix": "foodingo",
+    "capture.mode": "change_streams_update_full",
+    "snapshot.mode": "initial",
+    "transforms": "unwrap",
+    "transforms.unwrap.type": "io.debezium.connector.mongodb.transforms.ExtractNewDocumentState",
+    "transforms.unwrap.drop.tombstones": "false",
+    "transforms.unwrap.delete.handling.mode": "rewrite",
+    "key.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "key.converter.schemas.enable": "false",
+    "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "value.converter.schemas.enable": "false"
+  }
+}
