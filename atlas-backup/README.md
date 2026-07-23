@@ -12,7 +12,7 @@ This is extremely useful when you want to test the data pipeline using real, pro
 ## How to use
 To dump the backup into your local MongoDB, simply run the migration script located in the parent directory:
 ```bash
-cd ../mongodb
+cd mongodb
 ./migrate-from-atlas.sh
 ```
 *Note: Make sure the `foodingo-mongodb` docker container is already running before executing this script!*

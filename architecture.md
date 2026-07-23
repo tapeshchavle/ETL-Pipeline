@@ -16,10 +16,10 @@ AWS_SECRET_KEY="YOUR_ACTIVE_SECRET_KEY"
 ```
 
 ### 2. Boot the Docker Data Pipeline
-Navigate into the `data-pipeline` folder and start all 14 containers. **Crucially, you must pass the `--env-file` flag** so the containers can read your AWS keys!
+Start all 14 containers. **Crucially, you must pass the `--env-file` flag** so the containers can read your AWS keys!
 ```bash
-cd data-pipeline
-docker compose -f docker-compose-pipeline.yml --env-file ../.env up -d
+
+docker compose -f docker-compose-pipeline.yml --env-file .env up -d
 ```
 *Wait about 60 seconds for everything to become "Healthy". Kafka, Zookeeper, and PostgreSQL take a moment to initialize.*
 
