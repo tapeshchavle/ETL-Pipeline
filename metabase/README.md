@@ -1,41 +1,153 @@
-# 📊 Metabase (Business Intelligence) Guide
+# 📊 Metabase — Business Intelligence Dashboards
 
 ## Overview
-Metabase is a fast, open-source Business Intelligence (BI) tool. 
-It allows stakeholders, data analysts, and product managers to ask questions about the data and create beautiful dashboards without necessarily needing to write raw SQL.
 
-In our pipeline, Metabase sits at the very end of the data flow. It connects directly to the PostgreSQL `foodingo_warehouse` database, specifically querying the `analytics` schema that was cleaned and prepped by dbt.
+Metabase is an **open-source Business Intelligence (BI) tool** that connects directly to Foodingo's PostgreSQL data warehouse and provides interactive dashboards, charts, and self-service analytics — **without writing a single line of code**.
 
-## Setting up Metabase (`http://localhost:3000`)
-The first time you open Metabase, you must complete the 1-minute setup:
-1. Choose a language and create an admin account.
-2. **Add your data:**
-   - **Database type:** PostgreSQL
-   - **Name:** Foodingo Analytics
-   - **Host:** `foodingo-postgres` (This is the internal docker network name)
-   - **Port:** `5432`
-   - **Database name:** `foodingo_warehouse`
-   - **Username:** `foodingo`
-   - **Password:** `foodingo123`
-3. Finish the setup and go to the Home screen.
+It sits at the very end of the data pipeline, consuming the clean, transformed data from the `analytics` schema that dbt builds every night.
 
-## How to use Metabase
-Metabase allows you to "Ask a Question". You can use a visual query builder or write native SQL.
+---
 
-### Visual Builder (No Code)
-1. Click **New -> Question**.
-2. Select the `Foodingo Analytics` database and pick the `analytics.fact_orders` table.
-3. Click **Summarize**.
-4. Group by `order_date` and Sum by `total_amount`.
-5. Metabase instantly generates a time-series chart showing revenue over time!
+## Architecture
 
-### Native SQL
-If you prefer raw SQL, click **New -> SQL query**:
-```sql
-SELECT food_id, COUNT(*) as order_count 
-FROM analytics.fact_orders 
-GROUP BY food_id 
-ORDER BY order_count DESC 
-LIMIT 5;
 ```
-You can save these questions and pin them to a Dashboard to share with your team.
+              Airflow (nightly)
+                  │
+                  ▼ dbt transforms
+              PostgreSQL
+              analytics schema
+                  │
+                  │ JDBC Connection
+                  ▼
+┌─────────────────────────────────────┐
+│          Metabase (:3000)            │
+│                                     │
+│  ┌─── Dashboards ─────────────────┐ │
+│  │                                │ │
+│  │  📈 Daily Revenue Trend        │ │
+│  │  🍕 Food Popularity Chart      │ │
+│  │  🛒 Cart Abandonment Report    │ │
+│  │  📊 User Conversion Funnel     │ │
+│  │  🤖 ML Model Input Summary    │ │
+│  │                                │ │
+│  └────────────────────────────────┘ │
+│                                     │
+│  ┌─── Features ───────────────────┐ │
+│  │  • SQL Query Builder           │ │
+│  │  • Drag-and-drop charting      │ │
+│  │  • Scheduled email reports     │ │
+│  │  • Role-based access control   │ │
+│  │  • Embeddable dashboards       │ │
+│  └────────────────────────────────┘ │
+└─────────────────────────────────────┘
+```
+
+---
+
+## Initial Setup
+
+### Step 1: Open Metabase
+Navigate to **http://localhost:3000**
+
+### Step 2: Complete the Welcome Wizard
+1. Set your language
+2. Create your admin account (name, email, password)
+3. **Add your data source:**
+   - Database type: **PostgreSQL**
+   - Name: `Foodingo Warehouse`
+   - Host: `postgres`
+   - Port: `5432`
+   - Database name: `foodingo_warehouse`
+   - Username: `foodingo`
+   - Password: `foodingo123`
+4. Click **"Save"**
+
+### Step 3: Explore Your Data
+Click **"Browse Data"** → **"Foodingo Warehouse"** → **"Analytics"**
+
+You'll see all 7 analytics tables ready to visualize!
+
+---
+
+## Suggested Dashboards
+
+### 1. 📈 Daily Revenue Dashboard
+- **Table:** `analytics.daily_revenue`
+- **Chart type:** Line chart
+- **X-axis:** `revenue_date`
+- **Y-axis:** `total_revenue`
+- **Bonus:** Add `order_count` as a secondary axis
+
+### 2. 🍕 Food Popularity
+- **Table:** `analytics.food_popularity`
+- **Chart type:** Bar chart or Pie chart
+- **Sort by:** `order_count` descending
+- **Group by:** `category` for category-level insights
+
+### 3. 🛒 Cart Abandonment
+- **Table:** `analytics.cart_abandonment`
+- **Chart type:** Table with conditional formatting
+- **Highlight:** Users where `has_ordered_after = false` AND `days_since_cart > 3`
+
+### 4. 📊 User Conversion Funnel
+- **Table:** `analytics.user_funnel`
+- **Chart type:** Funnel chart or Stacked bar
+- **Metrics:** `registered_users` → `logged_in_users` → `cart_added_users` → `ordered_users`
+
+---
+
+## Connection Details
+
+| Setting | Value |
+|---|---|
+| Metabase URL | http://localhost:3000 |
+| Database Type | PostgreSQL |
+| Host | `postgres` (Docker internal hostname) |
+| Port | `5432` |
+| Database | `foodingo_warehouse` |
+| Username | `foodingo` |
+| Password | `foodingo123` |
+
+---
+
+## Docker Configuration
+
+```yaml
+metabase:
+  image: metabase/metabase:latest
+  container_name: foodingo-metabase
+  depends_on:
+    postgres:
+      condition: service_healthy
+  ports:
+    - "3000:3000"
+  environment:
+    MB_DB_TYPE: postgres
+    MB_DB_DBNAME: foodingo_warehouse
+    MB_DB_PORT: 5432
+    MB_DB_USER: foodingo
+    MB_DB_PASS: foodingo123
+    MB_DB_HOST: postgres
+```
+
+> **Note:** `MB_DB_*` variables tell Metabase where to store its own internal metadata (dashboards, users, settings). It also uses this same database for browsing analytics data.
+
+---
+
+## Useful Commands
+
+```bash
+# View Metabase logs
+docker logs -f foodingo-metabase
+
+# Restart Metabase
+docker compose -f docker-compose-pipeline.yml restart metabase
+```
+
+---
+
+## Learn More
+
+- [Metabase Documentation](https://www.metabase.com/docs/latest/)
+- [Metabase Dashboard Tutorial](https://www.metabase.com/learn/dashboards/creating-dashboards)
+- [Metabase SQL Guide](https://www.metabase.com/docs/latest/questions/native-editor/writing-sql)

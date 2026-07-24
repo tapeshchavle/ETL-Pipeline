@@ -1,37 +1,210 @@
-# 🌬️ Apache Airflow & dbt Guide
+# 🌀 Apache Airflow — Workflow Orchestration
 
 ## Overview
-Airflow is the "conductor" of this data pipeline. It doesn't process data itself; instead, it schedules and orchestrates other tools to do the work at the right time. 
 
-In our pipeline, Airflow runs on a daily schedule to trigger **dbt** (Data Build Tool), which transforms messy JSON data in our Postgres `raw` tables into beautiful, structured tables in the `analytics` schema. Once dbt finishes, Airflow tells the ML Service to retrain its models.
+Apache Airflow 2.9.1 is the **workflow orchestrator** for Foodingo's data pipeline. It schedules and monitors the daily execution of dbt transformations and ML model retraining. Instead of manually running dbt commands, Airflow automates the entire process as a **DAG (Directed Acyclic Graph)** that runs every night at 2:00 AM IST.
 
-## Understanding the Airflow UI (`http://localhost:8089`)
+---
 
-### 1. The DAGs Page (Home)
-A DAG (Directed Acyclic Graph) is a workflow. You will see a DAG named `foodingo_daily_pipeline`.
-- **Toggle Switch (Left):** Unpause the DAG to allow it to run on its schedule.
-- **Play Button (Right):** Manually trigger a run of the DAG immediately.
-- **Recent Runs:** Shows green circles (Success), red circles (Failed), or light green circles (Running).
+## Why Airflow?
 
-### 2. Graph View
-Click on the `foodingo_daily_pipeline` name, then click **Graph**. 
-This shows the visual dependency chain. You will see something like:
-`start_pipeline` ➔ `run_dbt_models` ➔ `retrain_ml_models` ➔ `end_pipeline`
-If a task fails, it turns red, and dependent tasks won't run.
+| Requirement | How Airflow Solves It |
+|---|---|
+| **Scheduled execution** | Cron-like scheduling with timezone support |
+| **Dependency management** | Tasks run in strict order (staging → facts → marts → test → ML) |
+| **Retry logic** | Failed tasks auto-retry up to 2 times with 5-minute delay |
+| **Monitoring UI** | Visual dashboard showing task status, logs, and history |
+| **Alerting** | Can send emails/Slack on failure (configurable) |
+| **Backfill** | Can re-run historical DAG runs if needed |
 
-### 3. Logs
-If a task turns red (fails), click on the red square in the Grid view, and click the **Logs** button. This will show you exactly what command failed (e.g., a SQL syntax error in dbt).
+---
 
-## What is dbt doing?
-dbt (Data Build Tool) is executed by Airflow. 
-The Python consumer dumps raw JSON events into `raw.order_events`. This is hard for business users to query.
-dbt runs SQL `SELECT` statements (called "models") to extract the JSON fields and create clean tables.
+## DAGs
 
-For example, it might convert:
-`{"userId": "123", "total": 45.00, "status": "completed"}`
-into an actual Postgres table row in `analytics.fact_orders`.
+### 1. `foodingo_daily_pipeline` (Primary DAG)
 
-## How to Test
-1. Click the Play button in the Airflow UI.
-2. Watch the DAG run.
-3. Open DBeaver or Postgres and query the `analytics` schema to see your newly transformed data!
+**Schedule:** Every day at 2:00 AM IST (20:30 UTC)
+
+```
+┌─────────────────┐    ┌────────────────┐    ┌───────────────┐
+│ dbt_run_staging  │───▶│ dbt_run_facts  │───▶│ dbt_run_marts │
+│                  │    │                │    │               │
+│ BashOperator     │    │ BashOperator   │    │ BashOperator  │
+│ --select staging │    │ --select facts │    │ --select marts│
+└─────────────────┘    └────────────────┘    └───────┬───────┘
+                                                      │
+                                                      ▼
+                        ┌─────────────────┐    ┌──────────────────────┐
+                        │ dbt_test        │───▶│ retrain_recommender  │
+                        │                 │    │                      │
+                        │ BashOperator    │    │ SimpleHttpOperator   │
+                        │ dbt test        │    │ POST /train/         │
+                        │                 │    │   recommender        │
+                        └─────────────────┘    └──────────────────────┘
+```
+
+**Task Details:**
+
+| Task ID | Operator | What It Does |
+|---|---|---|
+| `dbt_run_staging` | BashOperator | Runs `dbt run --select staging` — refreshes 3 staging views |
+| `dbt_run_facts` | BashOperator | Runs `dbt run --select facts` — rebuilds fact tables |
+| `dbt_run_marts` | BashOperator | Runs `dbt run --select marts` — rebuilds 5 mart tables |
+| `dbt_test` | BashOperator | Runs `dbt test` — validates data quality |
+| `retrain_recommender` | SimpleHttpOperator | `POST http://ml-service:5001/train/recommender` — retrains ML model |
+
+**Configuration:**
+```python
+default_args = {
+    "owner": "foodingo-data-team",
+    "depends_on_past": False,
+    "retries": 2,
+    "retry_delay": timedelta(minutes=5),
+    "email_on_failure": False,
+}
+```
+
+### 2. `foodingo_ml_retrain` (ML Retraining DAG)
+
+**Schedule:** Weekly (configurable)
+
+Dedicated DAG for ML model retraining, separate from the daily dbt pipeline for flexibility.
+
+---
+
+## Airflow Architecture in Docker
+
+```
+┌─────────────────────────────────────────────────┐
+│                Airflow Components                 │
+│                                                   │
+│  ┌──────────────────────────────────────┐        │
+│  │  airflow-db (PostgreSQL 15)          │        │
+│  │  Stores: DAG metadata, task history, │        │
+│  │          connections, variables      │        │
+│  │  Port: internal only                 │        │
+│  └──────────────────────────────────────┘        │
+│                    │                              │
+│  ┌─────────────────▼─────────────────────┐       │
+│  │  airflow-init (one-shot)              │       │
+│  │  Runs: db migrate + create admin user │       │
+│  └───────────────────────────────────────┘       │
+│                    │                              │
+│    ┌───────────────┼───────────────┐             │
+│    ▼                               ▼             │
+│  ┌──────────────────┐  ┌──────────────────────┐  │
+│  │ airflow-webserver │  │ airflow-scheduler    │  │
+│  │ Port: 8089        │  │ Executes DAG tasks   │  │
+│  │ UI Dashboard      │  │ LocalExecutor        │  │
+│  │                   │  │                      │  │
+│  │ Volumes:          │  │ Volumes:             │  │
+│  │ ./airflow/dags    │  │ ./airflow/dags       │  │
+│  │ ./dbt             │  │ ./dbt                │  │
+│  │ airflow-logs      │  │ airflow-logs         │  │
+│  │                   │  │                      │  │
+│  │ pip install:      │  │ pip install:         │  │
+│  │ dbt-postgres      │  │ dbt-postgres         │  │
+│  └──────────────────┘  └──────────────────────┘  │
+└─────────────────────────────────────────────────┘
+```
+
+**Key Design Decision:** dbt is installed via `_PIP_ADDITIONAL_REQUIREMENTS: "dbt-postgres==1.7.9"` inside both the webserver and scheduler containers. The dbt project files are mounted at `/opt/airflow/dbt`.
+
+---
+
+## Accessing the Airflow UI
+
+| Setting | Value |
+|---|---|
+| URL | **http://localhost:8089** |
+| Username | `admin` |
+| Password | `admin` |
+
+### What You'll See
+
+1. **DAGs Page** — List of all DAGs with status indicators (green=success, red=failure, yellow=running)
+2. **Graph View** — Visual representation of task dependencies
+3. **Tree View** — Historical run timeline
+4. **Task Logs** — Detailed logs for each individual task execution
+
+### How to Trigger a Manual Run
+
+1. Go to http://localhost:8089
+2. Find `foodingo_daily_pipeline` in the DAGs list
+3. Toggle the switch to **ON** (unpause)
+4. Click the **▶ Play** button on the right
+5. Select "Trigger DAG" from the dropdown
+6. Watch the tasks turn green one by one!
+
+---
+
+## Environment Variables Passed to dbt
+
+The DAG passes PostgreSQL credentials as environment variables before each dbt command:
+
+```python
+POSTGRES_ENV = (
+    "POSTGRES_HOST=postgres "
+    "POSTGRES_PORT=5432 "
+    "POSTGRES_DB=foodingo_warehouse "
+    "POSTGRES_USER=foodingo "
+    "POSTGRES_PASSWORD=foodingo123"
+)
+
+dbt_staging = BashOperator(
+    task_id="dbt_run_staging",
+    bash_command=f"{POSTGRES_ENV} dbt run --profiles-dir /opt/airflow/dbt "
+                 f"--project-dir /opt/airflow/dbt --select staging",
+)
+```
+
+---
+
+## Directory Structure
+
+```
+airflow/
+├── README.md
+└── dags/
+    ├── foodingo_daily_pipeline.py   # Primary DAG (daily dbt + ML retrain)
+    └── foodingo_ml_retrain.py       # ML-specific retraining DAG
+```
+
+---
+
+## Troubleshooting
+
+### DAG tasks fail with "dbt not found"
+Ensure `_PIP_ADDITIONAL_REQUIREMENTS: "dbt-postgres==1.7.9"` is set in both `airflow-webserver` and `airflow-scheduler` in `docker-compose-pipeline.yml`.
+
+### DAG tasks fail with "Connection refused"
+The dbt command needs `POSTGRES_HOST=postgres` (Docker hostname), not `localhost`. The DAG hardcodes this correctly.
+
+### DAG doesn't appear in the UI
+Wait 30 seconds for the scheduler to parse the DAGs directory. Check scheduler logs: `docker logs foodingo-airflow-scheduler`
+
+---
+
+## Useful Commands
+
+```bash
+# View Airflow scheduler logs
+docker logs -f foodingo-airflow-scheduler
+
+# Trigger DAG from CLI
+docker exec -i foodingo-airflow-scheduler airflow dags trigger foodingo_daily_pipeline
+
+# List all DAGs
+docker exec -i foodingo-airflow-scheduler airflow dags list
+
+# Check task status
+docker exec -i foodingo-airflow-scheduler airflow tasks state foodingo_daily_pipeline dbt_run_staging <execution_date>
+```
+
+---
+
+## Learn More
+
+- [Apache Airflow Documentation](https://airflow.apache.org/docs/)
+- [Airflow DAG Tutorial](https://airflow.apache.org/docs/apache-airflow/stable/tutorial/fundamentals.html)
+- [Airflow + dbt Integration Guide](https://docs.getdbt.com/docs/deploy/deployment-tools#airflow)

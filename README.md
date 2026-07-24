@@ -1,444 +1,552 @@
-<p align="center">
-  <img src="https://img.shields.io/badge/Spring%20Boot-3.4.4-6DB33F?style=for-the-badge&logo=springboot&logoColor=white" alt="Spring Boot"/>
-  <img src="https://img.shields.io/badge/Java-17-ED8B00?style=for-the-badge&logo=openjdk&logoColor=white" alt="Java"/>
-  <img src="https://img.shields.io/badge/MongoDB-Atlas-47A248?style=for-the-badge&logo=mongodb&logoColor=white" alt="MongoDB"/>
-  <img src="https://img.shields.io/badge/AWS-S3-FF9900?style=for-the-badge&logo=amazons3&logoColor=white" alt="AWS S3"/>
-  <img src="https://img.shields.io/badge/Razorpay-Payment-0C2451?style=for-the-badge&logo=razorpay&logoColor=white" alt="Razorpay"/>
-  <img src="https://img.shields.io/badge/Azure-Deployed-0078D4?style=for-the-badge&logo=microsoftazure&logoColor=white" alt="Azure"/>
-  <img src="https://img.shields.io/badge/Docker-Containerized-2496ED?style=for-the-badge&logo=docker&logoColor=white" alt="Docker"/>
-  <img src="https://img.shields.io/badge/Swagger-API%20Docs-85EA2D?style=for-the-badge&logo=swagger&logoColor=black" alt="Swagger"/>
-</p>
+# 🍕 Foodingo — Full-Stack Food Ordering Platform with Real-Time Data Engineering Pipeline
 
-# 🍔 Foodingo — Backend API
-
-**Foodingo** is a production-grade, full-stack food ordering platform backend built with **Spring Boot 3.4**. It powers a seamless food ordering experience with secure authentication, real-time cart management, integrated payment processing via Razorpay, and cloud-native image storage on AWS S3 — all deployed to **Azure Container Apps** with CI/CD via GitHub Actions.
-
-> 🌐 **Live API**: [foodingo-api.azurewebsites.net](https://foodingo-api-awasc8h4d7d7cmft.centralindia-01.azurewebsites.net/)  
-> 📖 **API Docs**: [Swagger UI](https://foodingo-api-awasc8h4d7d7cmft.centralindia-01.azurewebsites.net/swagger-ui/index.html)
+> A production-grade food ordering application built with **Spring Boot 3 + MongoDB** on the backend, a **React** frontend, and a **7-stage real-time data engineering pipeline** powered by Kafka, Debezium CDC, PostgreSQL, dbt, Airflow, a FastAPI ML service, and Metabase dashboards — all orchestrated via Docker Compose.
 
 ---
 
-## 📋 Table of Contents
+## 📑 Table of Contents
 
-- [Architecture Overview](#-architecture-overview)
-- [Features](#-features)
+- [High-Level Architecture](#-high-level-architecture)
 - [Tech Stack](#-tech-stack)
-- [Project Structure](#-project-structure)
-- [API Documentation](#-api-documentation)
-- [Getting Started](#-getting-started)
+- [Repository Structure](#-repository-structure)
+- [Data Flow — The 7 Stages](#-data-flow--the-7-stages)
+- [How Services Interact](#-how-services-interact)
+- [Prerequisites](#-prerequisites)
+- [Quick Start](#-quick-start)
 - [Environment Variables](#-environment-variables)
-- [Deployment](#-deployment)
-- [Frontend Clients](#-frontend-clients)
-- [Contributing](#-contributing)
+- [Service Ports & Dashboards](#-service-ports--dashboards)
+- [Testing the Full Pipeline](#-testing-the-full-pipeline)
+- [Troubleshooting](#-troubleshooting)
+- [Component Deep-Dive READMEs](#-component-deep-dive-readmes)
 
 ---
 
-## 🏗 Architecture Overview
+## 🏗 High-Level Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        Client Layer                             │
-│   ┌──────────────┐  ┌──────────────┐  ┌──────────────────────┐  │
-│   │  Foodingo    │  │  Admin       │  │  Mobile App          │  │
-│   │  Web App     │  │  Dashboard   │  │  (Android)           │  │
-│   │  (React)     │  │  (React)     │  │                      │  │
-│   └──────┬───────┘  └──────┬───────┘  └──────────┬───────────┘  │
-└──────────┼─────────────────┼─────────────────────┼──────────────┘
-           │                 │                     │
-           └─────────────────┼─────────────────────┘
-                             │  HTTPS + JWT
-                             ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                   Azure Container Apps                          │
-│  ┌────────────────────────────────────────────────────────────┐ │
-│  │               Spring Boot 3.4 (Java 17)                   │ │
-│  │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────────┐ │ │
-│  │  │   Auth   │ │   Food   │ │   Cart   │ │    Order     │ │ │
-│  │  │Controller│ │Controller│ │Controller│ │  Controller  │ │ │
-│  │  └────┬─────┘ └────┬─────┘ └────┬─────┘ └──────┬───────┘ │ │
-│  │       │             │            │              │         │ │
-│  │  ┌────┴─────────────┴────────────┴──────────────┴───────┐ │ │
-│  │  │              Service Layer (Business Logic)          │ │ │
-│  │  │  UserService │ FoodService │ CartService │ OrderSvc  │ │ │
-│  │  └────┬─────────────┬────────────┬──────────────┬───────┘ │ │
-│  │       │             │            │              │         │ │
-│  │  ┌────┴─────────────┴────────────┴──────────────┴───────┐ │ │
-│  │  │             Repository Layer (MongoDB)               │ │ │
-│  │  └──────────────────────────────────────────────────────┘ │ │
-│  │                                                           │ │
-│  │  ┌──────────────────┐  ┌──────────────────────────────┐   │ │
-│  │  │  Security Layer  │  │       Cross-Cutting           │   │ │
-│  │  │  JWT Filter      │  │  CORS • Validation • S3      │   │ │
-│  │  │  BCrypt Encoder  │  │  Razorpay • Swagger/OpenAPI  │   │ │
-│  │  └──────────────────┘  └──────────────────────────────┘   │ │
-│  └────────────────────────────────────────────────────────────┘ │
-└────────┬────────────────────┬──────────────────────┬────────────┘
-         │                    │                      │
-         ▼                    ▼                      ▼
-┌──────────────┐    ┌──────────────┐       ┌──────────────────┐
-│  MongoDB     │    │   AWS S3     │       │    Razorpay      │
-│  Atlas       │    │   Bucket     │       │    Payment       │
-│  (Database)  │    │   (Images)   │       │    Gateway       │
-└──────────────┘    └──────────────┘       └──────────────────┘
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                          FOODINGO PLATFORM                                  │
+│                                                                              │
+│  ┌─────────────────┐        ┌───────────────────────────────────────────┐    │
+│  │   React Frontend │───────▶│       Spring Boot 3.4 (Java 17)          │    │
+│  │   (User-facing)  │◀───────│       REST API on :8080                  │    │
+│  └─────────────────┘        │                                           │    │
+│                              │  ┌─────────┐ ┌─────────┐ ┌───────────┐  │    │
+│                              │  │  Users   │ │  Cart   │ │  Orders   │  │    │
+│                              │  └────┬─────┘ └────┬────┘ └─────┬─────┘  │    │
+│                              │       │            │            │        │    │
+│                              │       ▼            ▼            ▼        │    │
+│                              │  ┌──────────────────────────────────┐    │    │
+│                              │  │     MongoDB (foodies DB)         │    │    │
+│                              │  │     Primary Data Store           │    │    │
+│                              │  └──────────┬───────────────────────┘    │    │
+│                              │             │                           │    │
+│                              │             │ CDC (Change Data Capture) │    │
+│                              └─────────────┼───────────────────────────┘    │
+│                                            │                                │
+│  ════════════════════════════════════════════════════════════════════════     │
+│  ║                  DATA ENGINEERING PIPELINE                          ║     │
+│  ════════════════════════════════════════════════════════════════════════     │
+│                                            │                                │
+│  ┌──────────────┐     ┌────────────────────▼────────────────────┐           │
+│  │  Spring Boot  │────▶│         Apache Kafka (9092/9094)        │           │
+│  │  (Producers)  │     │    13 Topics • 3 Partitions Each       │           │
+│  └──────────────┘     │                                         │           │
+│                        │  ┌──────────────┐  ┌────────────────┐  │           │
+│  ┌──────────────┐     │  │ App Events   │  │ CDC Events     │  │           │
+│  │  Debezium    │────▶│  │ user.*, cart.*│  │ foodingo.      │  │           │
+│  │  (CDC)       │     │  │ order.*      │  │ foodies.*      │  │           │
+│  └──────────────┘     │  └──────────────┘  └────────────────┘  │           │
+│                        └──────────┬──────────────────────────────┘           │
+│                                   │                                         │
+│                        ┌──────────▼──────────────────────────────┐           │
+│                        │     Python Kafka Consumer               │           │
+│                        │     (consumer.py)                       │           │
+│                        │                                         │           │
+│                        │  ┌──────────────┐  ┌────────────────┐  │           │
+│                        │  │ PostgreSQL   │  │ MinIO / S3     │  │           │
+│                        │  │ raw schema   │  │ Parquet files  │  │           │
+│                        │  └──────┬───────┘  └────────────────┘  │           │
+│                        └─────────┼───────────────────────────────┘           │
+│                                  │                                          │
+│                        ┌─────────▼───────────────────────────────┐           │
+│                        │  Apache Airflow (DAG Scheduler)         │           │
+│                        │  Runs dbt transforms daily at 2 AM IST  │           │
+│                        │                                         │           │
+│                        │  ┌──────────────────────────────────┐   │           │
+│                        │  │    dbt (Data Build Tool)          │   │           │
+│                        │  │    staging → facts → marts        │   │           │
+│                        │  │    10 SQL models                  │   │           │
+│                        │  └──────────────┬───────────────────┘   │           │
+│                        └─────────────────┼───────────────────────┘           │
+│                                          │                                  │
+│                        ┌─────────────────▼───────────────────────┐           │
+│                        │    PostgreSQL analytics schema           │           │
+│                        │    fact_orders, daily_revenue,           │           │
+│                        │    food_popularity, cart_abandonment,    │           │
+│                        │    user_funnel, ml_user_order_matrix     │           │
+│                        └───────────┬────────────┬────────────────┘           │
+│                                    │            │                            │
+│                        ┌───────────▼──┐  ┌──────▼───────────────┐           │
+│                        │  Metabase    │  │  FastAPI ML Service  │           │
+│                        │  BI Dashboards│  │  Recommender + Churn │           │
+│                        │  :3000       │  │  :5001               │           │
+│                        └──────────────┘  └──────────────────────┘           │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
 ```
-
----
-
-## ✨ Features
-
-### 🔐 Authentication & Authorization
-| Feature | Description |
-|---------|-------------|
-| **User Registration** | Secure sign-up with BCrypt password hashing |
-| **JWT Login** | Stateless authentication with JSON Web Tokens (10-hour expiry) |
-| **JWT Filter** | Every request is intercepted and validated via `OncePerRequestFilter` |
-| **Role-based Access** | Public endpoints (food catalog, register, login) vs. authenticated endpoints (cart, orders) |
-
-### 🍕 Food Catalog Management (Admin)
-| Feature | Description |
-|---------|-------------|
-| **Add Food Item** | Multipart upload — food JSON + image file in a single request |
-| **Image Upload to S3** | Food images stored on AWS S3 with public-read ACL, returns CDN URL |
-| **List All Foods** | Retrieve the full food catalog (public, no auth required) |
-| **Get Food by ID** | Fetch a single food item's details |
-| **Delete Food Item** | Removes both the MongoDB document and the S3 image object |
-
-### 🛒 Shopping Cart
-| Feature | Description |
-|---------|-------------|
-| **Add to Cart** | Adds a food item (by ID); auto-increments quantity if already present |
-| **View Cart** | Returns the current user's cart with food-to-quantity map |
-| **Decrease Quantity** | Decrements item count by 1; removes the item when count reaches zero |
-| **Remove Item** | Instantly removes a specific item regardless of quantity |
-| **Clear Cart** | Deletes the entire cart document for the authenticated user |
-| **Auto-clear on Payment** | Cart is automatically cleared after successful Razorpay payment verification |
-
-### 💳 Order & Payment Processing
-| Feature | Description |
-|---------|-------------|
-| **Create Order with Payment** | Creates an order in MongoDB and a corresponding Razorpay payment order in a single transaction |
-| **Razorpay Integration** | Server-side order creation with `payment_capture=1` (auto-capture) in INR currency |
-| **Payment Verification** | Verifies `razorpay_order_id`, `razorpay_payment_id`, and `razorpay_signature` post-payment |
-| **User Order History** | Retrieve all orders for the currently authenticated user |
-| **Get Order by ID** | Fetch a specific order's full details |
-| **Delete Order** | Remove an order record |
-| **Admin: View All Orders** | Admin endpoint to list orders across all users |
-| **Admin: Update Order Status** | Patch endpoint to transition order status (e.g., `preparing` → `delivered`) |
-
-### ☁️ Cloud & Infrastructure
-| Feature | Description |
-|---------|-------------|
-| **AWS S3 Integration** | Programmatic file upload/delete via AWS SDK v2 for food images |
-| **MongoDB Atlas** | Cloud-hosted NoSQL database with connection string via environment variable |
-| **Docker Support** | Multi-stage Dockerfile — Maven build stage + Alpine JRE runtime for minimal image size |
-| **Azure CI/CD** | GitHub Actions workflow: build → upload artifact → deploy to Azure Web App on every push to `main` |
-| **CORS Configuration** | Dual-layer CORS (Spring Security + WebMvcConfigurer) supporting multiple frontend origins |
-| **Swagger/OpenAPI** | Interactive API documentation at `/swagger-ui.html` with JWT Bearer auth support |
 
 ---
 
 ## 🛠 Tech Stack
 
-| Layer | Technology |
-|-------|-----------|
-| **Framework** | Spring Boot 3.4.4 |
-| **Language** | Java 17 |
-| **Database** | MongoDB Atlas (via Spring Data MongoDB) |
-| **Authentication** | Spring Security + JWT (JJWT 0.11.5) |
-| **Payment Gateway** | Razorpay Java SDK 1.4.1 |
-| **File Storage** | AWS S3 (AWS SDK v2.31.23) |
-| **API Documentation** | SpringDoc OpenAPI (Swagger UI) 2.8.6 |
-| **Build Tool** | Maven (with Maven Wrapper) |
-| **Containerization** | Docker (Multi-stage: Maven + Eclipse Temurin 17 JRE Alpine) |
-| **CI/CD** | GitHub Actions → Azure Web Apps |
-| **Code Generation** | Lombok |
-| **Validation** | Spring Boot Starter Validation |
+### Backend Application
+| Technology | Version | Purpose |
+|---|---|---|
+| **Java** | 17 | Core language |
+| **Spring Boot** | 3.4.4 | REST API framework |
+| **Spring Security + JWT** | jjwt 0.11.5 | Authentication & authorization |
+| **Spring Data MongoDB** | 3.4.x | ODM for MongoDB |
+| **Spring Kafka** | 3.4.x | Kafka producer integration |
+| **Razorpay Java SDK** | 1.4.1 | Payment gateway |
+| **AWS SDK v2** | 2.31.23 | S3 image uploads |
+| **Lombok** | latest | Boilerplate reduction |
+| **Springdoc OpenAPI** | 2.8.6 | Swagger UI auto-generation |
+
+### Data Engineering Pipeline
+| Technology | Version | Purpose |
+|---|---|---|
+| **Apache Kafka** | 7.6.1 (Confluent) | Distributed event streaming |
+| **Apache Zookeeper** | 7.6.1 (Confluent) | Kafka cluster coordination |
+| **Schema Registry** | 7.6.1 (Confluent) | Schema evolution (available) |
+| **Debezium** | 2.5 | MongoDB Change Data Capture |
+| **Kafka Connect** | Debezium 2.5 | Connector framework for CDC |
+| **Python Kafka Consumer** | kafka-python | Event consumption + ETL |
+| **PostgreSQL** | 15-alpine | Analytical data warehouse |
+| **MinIO** | latest | S3-compatible data lake |
+| **Apache Airflow** | 2.9.1 | Workflow orchestration (DAGs) |
+| **dbt (Data Build Tool)** | 1.7.9 | SQL-based data transformations |
+| **FastAPI** | latest | ML model serving API |
+| **scikit-learn** | latest | ML: Collaborative Filtering, Logistic Regression |
+| **Metabase** | latest | Business Intelligence dashboards |
+
+### Infrastructure
+| Technology | Purpose |
+|---|---|
+| **Docker & Docker Compose** | Container orchestration |
+| **MongoDB** | 7.0 with Replica Set for CDC |
+| **Maven** | 3.8.5 for Java builds |
 
 ---
 
-## 📂 Project Structure
+## 📁 Repository Structure
 
 ```
-foodingo/
-├── .github/
-│   └── workflows/
-│       └── main_foodingo-api.yml        # CI/CD: Build & deploy to Azure
-├── src/
-│   └── main/
-│       ├── java/com/food/
-│       │   ├── FoodingoApplication.java # Spring Boot entry point
-│       │   │
-│       │   ├── config/                  # ⚙️ Configuration
-│       │   │   ├── AWSConfig.java       #    AWS S3 client bean
-│       │   │   ├── CorsConfig.java      #    WebMvcConfigurer CORS mappings
-│       │   │   ├── OpenApiConfig.java   #    Swagger/OpenAPI configuration
-│       │   │   └── SecurityConfig.java  #    Spring Security + JWT filter chain
-│       │   │
-│       │   ├── controller/              # 🌐 REST Controllers
-│       │   │   ├── AuthController.java  #    POST /api/user/login
-│       │   │   ├── CartController.java  #    CRUD /api/cart
-│       │   │   ├── FoodController.java  #    CRUD /api/foods
-│       │   │   ├── HomeController.java  #    GET / (health check)
-│       │   │   ├── OrderController.java #    CRUD /api/orders
-│       │   │   └── UserController.java  #    POST /api/user/register
-│       │   │
-│       │   ├── entity/                  # 📦 MongoDB Documents
-│       │   │   ├── CartEntity.java      #    Cart with userId + items map
-│       │   │   ├── FoodEntity.java      #    Food with S3 imageUrl
-│       │   │   ├── OrderEntity.java     #    Order with Razorpay fields
-│       │   │   └── UserEntity.java      #    User with BCrypt password
-│       │   │
-│       │   ├── filters/                 # 🔒 Security Filters
-│       │   │   └── JwtAuthenticationFilter.java  # Bearer token validation
-│       │   │
-│       │   ├── io/                      # 📨 DTOs (Request/Response)
-│       │   │   ├── AuthenticationRequest.java
-│       │   │   ├── AuthenticationResponse.java
-│       │   │   ├── CartRequest.java
-│       │   │   ├── CartResponse.java
-│       │   │   ├── FoodRequest.java
-│       │   │   ├── FoodResponse.java
-│       │   │   ├── OrderItem.java
-│       │   │   ├── OrderRequest.java
-│       │   │   ├── OrderResponse.java
-│       │   │   ├── UserRequest.java
-│       │   │   └── UserResponse.java
-│       │   │
-│       │   ├── repository/              # 🗄️ Data Access Layer
-│       │   │   ├── AuthenticationFacade.java
-│       │   │   ├── CartRepository.java
-│       │   │   ├── FoodRepository.java
-│       │   │   ├── OrderRepository.java
-│       │   │   └── UserRepository.java
-│       │   │
-│       │   ├── service/                 # 💼 Business Logic (Interfaces)
-│       │   │   ├── AppUserDetailsService.java  # UserDetailsService impl
-│       │   │   ├── AuthenticationFacadeImpl.java
-│       │   │   ├── CartService.java
-│       │   │   ├── FoodService.java
-│       │   │   ├── OrderService.java
-│       │   │   ├── UserService.java
-│       │   │   └── impl/               # Service Implementations
-│       │   │       ├── CartServiceImpl.java
-│       │   │       ├── FoodServiceImpl.java
-│       │   │       ├── OrderServiceImpl.java
-│       │   │       └── UserServiceImpl.java
-│       │   │
-│       │   └── util/                    # 🔧 Utilities
-│       │       └── JwtUtil.java         #    JWT generation & validation
-│       │
-│       └── resources/
-│           └── application.properties   # App config (env-driven)
+foodingo-main/
 │
-├── Dockerfile                           # Multi-stage Docker build
-├── pom.xml                              # Maven dependencies
-├── .env.example                         # Environment variable template
-├── .gitignore
-└── README.md
+├── src/                          # 🟢 Spring Boot Application (Java 17)
+│   └── main/java/com/food/
+│       ├── config/               #    Security, CORS, Kafka, AWS, OpenAPI config
+│       ├── controller/           #    REST controllers (Auth, Cart, Food, Order, Recommendation)
+│       ├── entity/               #    MongoDB document entities
+│       ├── event/                #    Kafka event POJOs (OrderEvent, CartEvent, UserEvent)
+│       ├── filters/              #    JWT authentication filter
+│       ├── io/                   #    Request/Response DTOs
+│       ├── repository/           #    MongoDB repositories
+│       ├── service/              #    Business logic + KafkaPublishingService
+│       └── service/impl/         #    Service implementations
+│
+├── .env                          # 🔐 Environment variables (MongoDB URI, JWT, AWS, Kafka)
+├── pom.xml                       # 📦 Maven dependencies
+├── Dockerfile                    # 🐳 Multi-stage Spring Boot Docker image
+│
+├── docker-compose-pipeline.yml   # 🐳 Full 14-service data pipeline orchestration
+│
+├── kafka/                        # 📨 Kafka topic initialization
+│   └── init-topics.sh            #    Creates 13 topics on startup
+│
+├── debezium/                     # 🔄 Change Data Capture configuration
+│   └── mongodb-connector.json    #    Debezium MongoDB connector config
+│
+├── mongodb/                      # 🍃 MongoDB replica set initialization
+│   └── init-replica-set.js       #    Initializes rs0 replica set for CDC
+│
+├── kafka-consumer/               # 🐍 Python Kafka Consumer (ETL)
+│   ├── consumer.py               #    Consumes Kafka → writes PostgreSQL + MinIO
+│   ├── Dockerfile                #    Consumer Docker image
+│   └── requirements.txt          #    Python dependencies
+│
+├── postgres/                     # 🐘 PostgreSQL Data Warehouse
+│   └── init.sql                  #    Creates raw + analytics schemas (8 tables)
+│
+├── minio/                        # 📦 MinIO (S3-compatible) Data Lake
+│   └── init-buckets.sh           #    Creates foodingo-data-lake bucket
+│
+├── dbt/                          # 🔧 dbt Data Transformations
+│   ├── dbt_project.yml           #    Project configuration
+│   ├── profiles.yml              #    PostgreSQL connection profile
+│   └── models/
+│       ├── staging/              #    3 view models (dedup + clean)
+│       ├── facts/                #    2 table models (fact_orders, fact_cart_events)
+│       └── marts/                #    5 table models (revenue, popularity, churn, funnel, ML matrix)
+│
+├── airflow/                      # 🌀 Apache Airflow DAGs
+│   └── dags/
+│       ├── foodingo_daily_pipeline.py   # Daily: dbt staging→facts→marts→ML retrain
+│       └── foodingo_ml_retrain.py       # ML model retraining DAG
+│
+├── ml-service/                   # 🧠 FastAPI Machine Learning Service
+│   ├── app.py                    #    FastAPI application (5 endpoints)
+│   ├── recommender.py            #    Collaborative Filtering (Cosine Similarity)
+│   ├── churn_predictor.py        #    Logistic Regression (Cart Abandonment)
+│   ├── Dockerfile                #    ML service Docker image
+│   └── requirements.txt          #    Python ML dependencies
+│
+├── metabase/                     # 📊 Metabase BI Dashboard
+│   └── README.md                 #    Dashboard setup guide
+│
+├── architecture.md               # 📐 Detailed architecture documentation
+└── atlas-backup/                 # 💾 MongoDB Atlas → local migration scripts
 ```
 
 ---
 
-## 📖 API Documentation
+## 🌊 Data Flow — The 7 Stages
 
-### Interactive Swagger UI
+### Stage 1: Event Generation (Spring Boot → Kafka)
 
-Once the application is running, access the full interactive API documentation at:
+When a user interacts with the Foodingo app (registers, adds to cart, places an order), the Spring Boot backend **publishes real-time events** to Apache Kafka topics.
 
-- **Local**: [http://localhost:8080/swagger-ui.html](http://localhost:8080/swagger-ui.html)
-- **Production**: [https://foodingo-api-awasc8h4d7d7cmft.centralindia-01.azurewebsites.net/swagger-ui/index.html)
+**How it works at the code level:**
+- `KafkaPublishingService.java` is a safety wrapper around Spring's `KafkaTemplate`.
+- It uses **fire-and-forget async publishing** — if Kafka is down, the main app still works.
+- Each service (`OrderServiceImpl`, `CartServiceImpl`, `UserServiceImpl`) calls `kafkaPublishingService.publish(topic, key, event)`.
+- Events are serialized to JSON using Spring's `JsonSerializer`.
+- Spring Boot connects to Kafka on port **9094** (external listener).
 
-> 💡 **Tip**: Use the **Authorize** button in Swagger UI to paste your JWT token and test authenticated endpoints.
+**Topics produced by Spring Boot (9 topics):**
+| Topic | Triggered When |
+|---|---|
+| `user.registered` | New user signs up |
+| `user.login` | User logs in |
+| `cart.item_added` | Item added to cart |
+| `cart.item_removed` | Item removed from cart |
+| `cart.cleared` | Cart emptied |
+| `cart.item_deleted` | Single item deleted |
+| `order.created` | Order placed (pre-payment) |
+| `payment.verified` | Razorpay payment confirmed |
+| `order.status_updated` | Order status changed |
 
-### API Endpoints Summary
+### Stage 2: Change Data Capture (MongoDB → Debezium → Kafka)
 
-#### 🔐 Authentication (`/api/user`)
+In parallel to the application events, **Debezium** watches MongoDB for any direct database changes (inserts, updates, deletes) and streams them to Kafka.
 
-| Method | Endpoint | Auth | Description |
-|--------|----------|------|-------------|
-| `POST` | `/api/user/register` | ❌ | Register a new user account |
-| `POST` | `/api/user/login` | ❌ | Authenticate and receive JWT token |
+**How it works:**
+- MongoDB runs as a **Replica Set** (`rs0`) — required for Change Streams.
+- Debezium's MongoDB connector uses `change_streams_update_full` capture mode.
+- It watches 4 collections: `foodies.orders`, `foodies.users`, `foodies.food`, `foodies.carts`.
+- Changes are published to Kafka topics prefixed with `foodingo.foodies.*`.
 
-#### 🍕 Food Catalog (`/api/foods`)
+**Topics produced by Debezium (4 topics):**
+| Topic | MongoDB Collection |
+|---|---|
+| `foodingo.foodies.orders` | Orders collection |
+| `foodingo.foodies.users` | Users collection |
+| `foodingo.foodies.food` | Food items collection |
+| `foodingo.foodies.carts` | Cart collection |
 
-| Method | Endpoint | Auth | Description |
-|--------|----------|------|-------------|
-| `POST` | `/api/foods/add` | ✅ | Add a new food item with image (multipart) |
-| `GET` | `/api/foods` | ❌ | List all food items |
-| `GET` | `/api/foods/{id}` | ❌ | Get a specific food item |
-| `DELETE` | `/api/foods/delete/{id}` | ✅ | Delete a food item and its S3 image |
+### Stage 3: Kafka Consumer (Kafka → PostgreSQL + MinIO)
 
-#### 🛒 Cart (`/api/cart`)
+A **Python consumer** (`consumer.py`) subscribes to all 13 Kafka topics and performs dual writes:
 
-| Method | Endpoint | Auth | Description |
-|--------|----------|------|-------------|
-| `POST` | `/api/cart` | ✅ | Add a food item to cart |
-| `GET` | `/api/cart` | ✅ | View current user's cart |
-| `POST` | `/api/cart/remove` | ✅ | Decrease item quantity by 1 |
-| `DELETE` | `/api/cart/delete-cart` | ✅ | Remove a specific item from cart |
-| `DELETE` | `/api/cart/delete` | ✅ | Clear the entire cart |
+1. **PostgreSQL (raw schema):** Writes structured rows to 4 raw tables (`raw.user_events`, `raw.cart_events`, `raw.order_events`, `raw.cdc_events`).
+2. **MinIO/S3 (Parquet):** Converts events to columnar Parquet format and uploads to `foodingo-data-lake` bucket, partitioned by `year/month/day/hour`.
 
-#### 💳 Orders (`/api/orders`)
+**Why dual-write?**
+- PostgreSQL is optimized for **fast SQL queries** (used by dbt and Metabase).
+- Parquet on S3 is optimized for **long-term archival** and big data tools like Spark.
 
-| Method | Endpoint | Auth | Description |
-|--------|----------|------|-------------|
-| `POST` | `/api/orders/create` | ✅ | Create order + Razorpay payment |
-| `POST` | `/api/orders/verify` | ✅ | Verify Razorpay payment callback |
-| `GET` | `/api/orders` | ✅ | Get authenticated user's orders |
-| `GET` | `/api/orders/{orderId}` | ✅ | Get a specific order |
-| `DELETE` | `/api/orders/{orderId}` | ✅ | Delete an order |
-| `GET` | `/api/orders/all` | ❌ | **Admin**: List all orders |
-| `PATCH` | `/api/orders/status/{orderId}` | ✅ | **Admin**: Update order status |
+### Stage 4: dbt Data Transformations (raw → analytics)
+
+**dbt (Data Build Tool)** transforms the raw event data into clean, business-ready analytics tables using a 3-layer architecture:
+
+| Layer | Model Count | Materialization | Purpose |
+|---|---|---|---|
+| **Staging** | 3 views | `VIEW` | Deduplication, type casting, filtering |
+| **Facts** | 2 tables | `TABLE` | Core business facts (orders, cart events) |
+| **Marts** | 5 tables | `TABLE` | Business-specific aggregations |
+
+**The 10 dbt Models:**
+| Model | Layer | What It Does |
+|---|---|---|
+| `stg_orders` | Staging | Deduplicates raw orders by `(order_id, event_type)` |
+| `stg_cart` | Staging | Cleans raw cart events |
+| `stg_users` | Staging | Cleans raw user events |
+| `fact_orders` | Facts | One row per paid order with item count, order hour |
+| `fact_cart_events` | Facts | Cleaned cart interactions with date/hour extraction |
+| `daily_revenue` | Marts | Daily revenue, order count, avg order value |
+| `food_popularity` | Marts | Per-food-item order count and revenue |
+| `cart_abandonment` | Marts | Users who added to cart but didn't order |
+| `user_funnel` | Marts | Daily conversion funnel (register→login→cart→order) |
+| `ml_user_order_matrix` | Marts | User×Food order count matrix for ML |
+
+### Stage 5: Airflow Orchestration
+
+Apache Airflow runs the `foodingo_daily_pipeline` DAG **every day at 2:00 AM IST** (20:30 UTC).
+
+**DAG Task Chain:**
+```
+dbt_run_staging → dbt_run_facts → dbt_run_marts → dbt_test → retrain_recommender
+```
+
+### Stage 6: Machine Learning Service
+
+The FastAPI ML service provides two AI models:
+
+1. **Food Recommender** (Collaborative Filtering with Cosine Similarity)
+   - Reads `analytics.ml_user_order_matrix` (user×food order counts)
+   - Builds an item-item similarity matrix
+   - For known users: recommends foods similar to what they've ordered
+   - For new users: returns the top-10 most popular foods (cold-start fallback)
+   - Saves model as `/tmp/recommender_model.pkl` inside the container
+
+2. **Churn Predictor** (Logistic Regression)
+   - Reads `analytics.cart_abandonment` data
+   - Features: `days_since_cart`, `cart_item_count`, `has_ordered_after`
+   - Output: probability (0–1) of abandonment + risk label (low/medium/high)
+   - Provides actionable recommendation (e.g., "Send recovery email with discount")
+
+### Stage 7: Business Intelligence (Metabase)
+
+Metabase connects directly to the PostgreSQL `analytics` schema and provides:
+- Interactive dashboards and charts
+- SQL query builder
+- Automated email reports
+- Self-service analytics for non-technical stakeholders
 
 ---
 
-## 🚀 Getting Started
+## 🔗 How Services Interact
 
-### Prerequisites
+```
+Spring Boot (:8080)
+    │
+    ├──[MongoDB]──▶ MongoDB (:27017) ──[CDC]──▶ Debezium ──▶ Kafka
+    │
+    ├──[Kafka Producer]──▶ Kafka (:9094 external / :9092 internal)
+    │                           │
+    │                           ▼
+    │                     Python Consumer ──┬──▶ PostgreSQL (:5432)
+    │                                      └──▶ MinIO (:9000)
+    │
+    ├──[HTTP GET]──▶ ML Service (:5001) ──[SQL]──▶ PostgreSQL
+    │
+    └──[Swagger UI]──▶ http://localhost:8080/swagger-ui.html
 
-- **Java 17** or higher
-- **Maven 3.8+** (or use the included Maven Wrapper)
-- **MongoDB Atlas** account (or local MongoDB instance)
-- **AWS Account** with S3 bucket configured
-- **Razorpay Account** with API keys
+Airflow (:8089) ──[BashOperator]──▶ dbt ──[SQL]──▶ PostgreSQL
+                 ──[HTTP POST]──▶ ML Service (:5001/train/recommender)
 
-### 1. Clone the Repository
+Metabase (:3000) ──[SQL]──▶ PostgreSQL (analytics schema)
 
-```bash
-git clone https://github.com/your-username/foodingo.git
-cd foodingo
+Kafka UI (:8090) ──[Admin]──▶ Kafka (view topics, messages, consumer groups)
+
+MinIO Console (:9001) ──[Admin]──▶ MinIO (view Parquet files in data lake)
 ```
 
-### 2. Configure Environment Variables
+---
+
+## ✅ Prerequisites
+
+- **Docker Desktop** (4.0+) with at least **6 GB RAM** allocated
+- **Java 17** or later (for running Spring Boot locally)
+- **Maven 3.8+** (included via `./mvnw` wrapper)
+- **Node.js 18+** (only if running the React frontend)
+
+---
+
+## 🚀 Quick Start
+
+### Step 1: Clone and Configure
 
 ```bash
-cp .env.example .env
+git clone https://github.com/your-repo/foodingo-main.git
+cd foodingo-main
 ```
 
-Edit `.env` with your actual credentials:
+Copy `.env.example` to `.env` and fill in your credentials (MongoDB URI, JWT secret, AWS keys, Razorpay keys).
 
-```env
-# MongoDB Connection
-MONGODB_URI=mongodb+srv://username:password@cluster.mongodb.net/foodingo?retryWrites=true&w=majority
-
-# JWT Secret (use a strong, random string)
-JWT_SECRET=your-super-secret-jwt-key-min-256-bits
-
-# AWS S3 Configuration
-AWS_ACCESS_KEY=AKIA...
-AWS_SECRET_KEY=wJalrXUtnFEMI/K7MDENG...
-AWS_S3_BUCKET=foodingo-images
-AWS_REGION=ap-south-1
-
-# Razorpay Configuration
-RAZORPAY_KEY=rzp_live_...
-RAZORPAY_SECRET=your-razorpay-secret
-```
-
-### 3. Run the Application
+### Step 2: Start the Data Pipeline (Docker Compose)
 
 ```bash
-# Using Maven Wrapper
+docker compose -f docker-compose-pipeline.yml --env-file .env up -d
+```
+
+This boots **14 containers** in dependency order. Wait ~2 minutes for everything to be healthy.
+
+### Step 3: Verify All Services Are Running
+
+```bash
+docker compose -f docker-compose-pipeline.yml ps
+```
+
+All containers should show `Up` or `Healthy` status.
+
+### Step 4: Start the Spring Boot Backend
+
+```bash
+# Load environment variables
+source .env
+
+# Run the application
 ./mvnw spring-boot:run
-
-# Or with Maven
-mvn spring-boot:run
 ```
 
-The API will start on **http://localhost:8080**.
+The backend starts on `http://localhost:8080`.
 
-### 4. Access Swagger UI
+### Step 5: Test the API
 
-Navigate to [http://localhost:8080/swagger-ui.html](http://localhost:8080/swagger-ui.html) to explore and test all endpoints.
+Open Swagger UI: **http://localhost:8080/swagger-ui.html**
 
-### 5. Run with Docker
+1. Register a user via `POST /api/user/register`
+2. Login via `POST /api/user/login` (copy the JWT token)
+3. Add items to cart via `POST /api/cart`
+4. Place an order via `POST /api/orders`
+
+### Step 6: Run the dbt Pipeline
+
+Either wait for Airflow to run at 2 AM IST, or trigger manually:
 
 ```bash
-# Build the Docker image
-docker build -t foodingo-api .
+docker exec -i foodingo-airflow-webserver bash -c \
+  "POSTGRES_HOST=postgres POSTGRES_PORT=5432 POSTGRES_DB=foodingo_warehouse \
+   POSTGRES_USER=foodingo POSTGRES_PASSWORD=foodingo123 \
+   dbt run --profiles-dir /opt/airflow/dbt --project-dir /opt/airflow/dbt"
+```
 
-# Run the container
-docker run -p 8080:8080 \
-  -e MONGODB_URI="your-mongodb-uri" \
-  -e JWT_SECRET="your-jwt-secret" \
-  -e AWS_ACCESS_KEY="your-aws-key" \
-  -e AWS_SECRET_KEY="your-aws-secret" \
-  -e AWS_S3_BUCKET="your-bucket" \
-  -e AWS_REGION="ap-south-1" \
-  -e RAZORPAY_KEY="your-razorpay-key" \
-  -e RAZORPAY_SECRET="your-razorpay-secret" \
-  foodingo-api
+### Step 7: Check Your Analytics
+
+```bash
+docker exec -i foodingo-postgres psql -U foodingo -d foodingo_warehouse -c \
+  "SELECT * FROM analytics.fact_orders;"
 ```
 
 ---
 
 ## 🔐 Environment Variables
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `MONGODB_URI` | ✅ | MongoDB Atlas connection string |
-| `JWT_SECRET` | ✅ | Secret key for JWT signing (HS256) |
-| `AWS_ACCESS_KEY` | ✅ | AWS IAM access key for S3 |
-| `AWS_SECRET_KEY` | ✅ | AWS IAM secret key for S3 |
-| `AWS_S3_BUCKET` | ✅ | S3 bucket name for food images |
-| `AWS_REGION` | ❌ | AWS region (default: `ap-south-1`) |
-| `RAZORPAY_KEY` | ✅ | Razorpay API key |
-| `RAZORPAY_SECRET` | ✅ | Razorpay API secret |
+| Variable | Description | Example |
+|---|---|---|
+| `MONGODB_URI` | MongoDB connection string | `mongodb://localhost:27017/foodies?replicaSet=rs0` |
+| `JWT_SECRET` | JWT signing key (min 32 chars) | `your-secret-key-here` |
+| `AWS_ACCESS_KEY` | AWS S3 access key | `AKIA...` |
+| `AWS_SECRET_KEY` | AWS S3 secret key | `U9ti...` |
+| `AWS_S3_BUCKET` | Food images S3 bucket | `tapesh-myfood-images` |
+| `AWS_REGION` | AWS region for images | `eu-north-1` |
+| `RAZORPAY_KEY` | Razorpay API key | `rzp_test_...` |
+| `RAZORPAY_SECRET` | Razorpay API secret | `OFLTu...` |
+| `KAFKA_BOOTSTRAP_SERVERS` | Kafka broker address | `localhost:9094` |
+| `ML_SERVICE_URL` | ML service URL | `http://localhost:5001` |
+| `AWS_DATALAKE_BUCKET` | Data lake S3 bucket | `foodingo-data-lake` |
 
 ---
 
-## 🚢 Deployment
+## 🌐 Service Ports & Dashboards
 
-### Azure Web App (Production)
+| Service | Port | URL |
+|---|---|---|
+| Spring Boot API | 8080 | http://localhost:8080 |
+| Swagger UI | 8080 | http://localhost:8080/swagger-ui.html |
+| Kafka UI | 8090 | http://localhost:8090 |
+| Schema Registry | 8081 | http://localhost:8081 |
+| Kafka Connect | 8083 | http://localhost:8083 |
+| Airflow | 8089 | http://localhost:8089 (admin/admin) |
+| ML Service (FastAPI) | 5001 | http://localhost:5001/docs |
+| Metabase | 3000 | http://localhost:3000 |
+| MinIO Console | 9001 | http://localhost:9001 (foodingo/foodingo123) |
+| MinIO API | 9000 | http://localhost:9000 |
+| PostgreSQL | 5432 | `psql -U foodingo -d foodingo_warehouse` |
+| MongoDB | 27017 | `mongosh localhost:27017` |
+| Kafka (internal) | 9092 | Used by Docker services |
+| Kafka (external) | 9094 | Used by Spring Boot on host |
 
-The project uses **GitHub Actions** for automated CI/CD deployment:
+---
 
-1. **On push to `main`** → Triggers the workflow
-2. **Build stage** → Compiles the JAR with Maven (Java 17)
-3. **Deploy stage** → Uploads the JAR artifact and deploys to Azure Web App (`foodingo-api`)
+## 🧪 Testing the Full Pipeline
 
-**Workflow file**: [`.github/workflows/main_foodingo-api.yml`](.github/workflows/main_foodingo-api.yml)
+### End-to-End Test Walkthrough
 
-### Docker Deployment
+1. **Register + Login** via Swagger UI → check Kafka UI for `user.registered` topic
+2. **Add to Cart** → check `cart.item_added` topic in Kafka UI
+3. **Place Order** → check `order.created` topic
+4. **Verify PostgreSQL raw data:**
+   ```bash
+   docker exec -i foodingo-postgres psql -U foodingo -d foodingo_warehouse -c \
+     "SELECT count(*) FROM raw.order_events;"
+   ```
+5. **Trigger Airflow DAG** → click Play on `foodingo_daily_pipeline` in Airflow UI
+6. **Check analytics tables:**
+   ```bash
+   docker exec -i foodingo-postgres psql -U foodingo -d foodingo_warehouse -c \
+     "SELECT * FROM analytics.fact_orders;"
+   ```
+7. **Train ML model:**
+   ```bash
+   curl -X POST http://localhost:5001/train/recommender
+   ```
+8. **Get recommendations:**
+   ```bash
+   curl http://localhost:5001/recommend/YOUR_USER_ID
+   ```
+9. **Open Metabase** at http://localhost:3000 and create dashboards
 
-The multi-stage Dockerfile ensures minimal image size:
+---
 
+## 🔧 Troubleshooting
+
+### Kafka won't start (`NodeExistsException`)
+This happens when Docker Desktop is restarted and Zookeeper has stale session data.
+```bash
+docker compose -f docker-compose-pipeline.yml rm -sf zookeeper kafka
+docker compose -f docker-compose-pipeline.yml --env-file .env up -d
 ```
-Stage 1: maven:3.8.5-openjdk-17    → Build FAT JAR
-Stage 2: eclipse-temurin:17-jre-alpine → Run with minimal JRE (~180MB)
+
+### Airflow dbt tasks fail
+Ensure the Airflow containers have dbt installed and the dbt directory mounted:
+```yaml
+# docker-compose-pipeline.yml — airflow-scheduler/webserver
+_PIP_ADDITIONAL_REQUIREMENTS: "dbt-postgres==1.7.9"
+volumes:
+  - ./dbt:/opt/airflow/dbt
+```
+
+### Analytics tables are empty
+Run dbt manually to verify:
+```bash
+docker exec -i foodingo-airflow-webserver bash -c \
+  "POSTGRES_HOST=postgres dbt run --profiles-dir /opt/airflow/dbt --project-dir /opt/airflow/dbt"
 ```
 
 ---
 
-## 🖥 Frontend Clients
+## 📚 Component Deep-Dive READMEs
 
-Foodingo backend supports multiple frontend applications:
+Each component has its own detailed README with deep technical explanations:
 
-| Client | URL | Description |
-|--------|-----|-------------|
-| **Customer Web App** | [foodingo.tapesh.me](https://foodingo.tapesh.me) | React-based food ordering interface |
-| **Admin Dashboard** | [admin-foodingo.tapesh.me](https://admin-foodingo.tapesh.me) | Admin panel for order & food management |
-| **Mobile App** | Android (Native) | Mobile ordering experience |
-
----
-
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create a feature branch: `git checkout -b feature/amazing-feature`
-3. Commit your changes: `git commit -m 'Add amazing feature'`
-4. Push to the branch: `git push origin feature/amazing-feature`
-5. Open a Pull Request
+| Component | README |
+|---|---|
+| Kafka (Event Streaming) | [kafka/README.md](kafka/README.md) |
+| Debezium (CDC) | [debezium/README.md](debezium/README.md) |
+| MongoDB (Replica Set) | [mongodb/README.md](mongodb/README.md) |
+| Kafka Consumer (ETL) | [kafka-consumer/README.md](kafka-consumer/README.md) |
+| PostgreSQL (Warehouse) | [postgres/README.md](postgres/README.md) |
+| MinIO (Data Lake) | [minio/README.md](minio/README.md) |
+| dbt (Transformations) | [dbt/README.md](dbt/README.md) |
+| Airflow (Orchestration) | [airflow/README.md](airflow/README.md) |
+| ML Service (FastAPI) | [ml-service/README.md](ml-service/README.md) |
+| Metabase (BI) | [metabase/README.md](metabase/README.md) |
 
 ---
 
 ## 📄 License
 
-This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
-
----
-
-<p align="center">
-  Built with ❤️ by <a href="https://tapesh.me">Tapesh Chavle</a>
-</p>
-# ETL-Pipeline
+This project is built for educational and portfolio purposes.

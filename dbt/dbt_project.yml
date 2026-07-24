@@ -15,11 +15,8 @@ clean-targets: ["target", "dbt_packages"]
 models:
   foodingo:
     staging:
-      +schema: analytics
       +materialized: view
     facts:
-      +schema: analytics
       +materialized: table
     marts:
-      +schema: analytics
       +materialized: table

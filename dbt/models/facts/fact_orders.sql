@@ -9,6 +9,7 @@ SELECT
     amount,
     payment_status,
     order_status,
+    ordered_items,
     jsonb_array_length(ordered_items)   AS item_count,
     DATE(event_timestamp)               AS order_date,
     EXTRACT(HOUR FROM event_timestamp)  AS order_hour,

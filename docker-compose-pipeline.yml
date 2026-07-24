@@ -373,9 +373,11 @@ services:
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
       AIRFLOW__CORE__LOAD_EXAMPLES: "false"
       AIRFLOW__WEBSERVER__SECRET_KEY: foodingo-secret-key
+      _PIP_ADDITIONAL_REQUIREMENTS: "dbt-postgres==1.7.9"
     volumes:
       - ./airflow/dags:/opt/airflow/dags
       - airflow-logs:/opt/airflow/logs
+      - ./dbt:/opt/airflow/dbt
     networks:
       - foodingo-pipeline
     healthcheck:
@@ -395,9 +397,11 @@ services:
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-db/airflow
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
       AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      _PIP_ADDITIONAL_REQUIREMENTS: "dbt-postgres==1.7.9"
     volumes:
       - ./airflow/dags:/opt/airflow/dags
       - airflow-logs:/opt/airflow/logs
+      - ./dbt:/opt/airflow/dbt
     networks:
       - foodingo-pipeline
     restart: unless-stopped
