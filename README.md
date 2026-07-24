@@ -71,19 +71,19 @@
 │                                  │                  │                       │
 │                        ┌─────────▼────────┐  ┌──────▼─────────────┐         │
 │                        │  Apache Airflow  │  │  Apache Spark      │         │
-│                        │  Runs dbt daily  │  │  Big Data Cluster  │         │
+│                        │  (Orchestrator)  │─▶│  Big Data Cluster  │         │
 │                        │                  │  │  s3a:// analytics  │         │
 │                        │  ┌────────────┐  │  └──────┬─────────────┘         │
 │                        │  │    dbt     │  │         │                       │
-│                        │  └──────┬─────┘  │         │                       │
+│                        │  └──────┬─────┘  │         │ Trains AI Models      │
 │                        └─────────┼────────┘         │                       │
 │                                  │                  │                       │
+│                        ┌─────────▼────────┐         │                       │
+│                        │  PostgreSQL      │         │                       │
+│                        │  analytics       │         │                       │
+│                        └─────────┬────────┘         │                       │
+│                                  │                  │                       │
 │                        ┌─────────▼────────┐  ┌──────▼─────────────┐         │
-│                        │  PostgreSQL      │  │ Jupyter Notebook   │         │
-│                        │  analytics       │  │ PySpark UI         │         │
-│                        └─────────┬────────┘  └────────────────────┘         │
-│                                  │                                          │
-│                        ┌─────────▼────────┐  ┌────────────────────┐         │
 │                        │  Metabase BI     │  │ FastAPI ML Service │         │
 │                        │  Dashboards      │  │ Recommender/Churn  │         │
 │                        └──────────────────┘  └────────────────────┘         │
@@ -303,21 +303,22 @@ A **Python consumer** (`consumer.py`) subscribes to all 13 Kafka topics and perf
 | `user_funnel` | Marts | Daily conversion funnel (register→login→cart→order) |
 | `ml_user_order_matrix` | Marts | User×Food order count matrix for ML |
 
-### Stage 5: Airflow Orchestration
+### Stage 5: Airflow Orchestration (Automating Spark & dbt)
 
-Apache Airflow runs the `foodingo_daily_pipeline` DAG **every day at 2:00 AM IST** (20:30 UTC).
+Apache Airflow runs the `foodingo_daily_pipeline` DAG **every day at 2:00 AM IST** (20:30 UTC). This is the "brain" that runs all background tasks while the CEO is sleeping.
 
 **DAG Task Chain:**
 ```
-dbt_run_staging → dbt_run_facts → dbt_run_marts → dbt_test → retrain_recommender
+dbt_run_staging → dbt_run_facts → dbt_run_marts → trigger_spark_job → retrain_ml_models
 ```
+*Note: The `trigger_spark_job` step spins up the Apache Spark cluster, points it to the S3 Data Lake, crunches the billions of rows of historical data, and prepares the heavy matrix calculations for the Machine Learning models.*
 
-### Stage 6: Machine Learning Service
+### Stage 6: Machine Learning Service (Trained by Spark)
 
-The FastAPI ML service provides two AI models:
+The FastAPI ML service provides two AI models that rely on the heavy lifting done by Apache Spark:
 
 1. **Food Recommender** (Collaborative Filtering with Cosine Similarity)
-   - Reads `analytics.ml_user_order_matrix` (user×food order counts)
+   - **Trained by Spark**: Spark crunches years of historical data from the S3 Data Lake to generate the `analytics.ml_user_order_matrix`.
    - Builds an item-item similarity matrix
    - For known users: recommends foods similar to what they've ordered
    - For new users: returns the top-10 most popular foods (cold-start fallback)
