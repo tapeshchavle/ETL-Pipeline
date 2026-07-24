@@ -315,10 +315,10 @@ services:
       POSTGRES_DB: foodingo_warehouse
       POSTGRES_USER: foodingo
       POSTGRES_PASSWORD: foodingo123
-      MINIO_ENDPOINT: http://minio:9000
-      MINIO_ACCESS_KEY: foodingo
-      MINIO_SECRET_KEY: foodingo123
-      MINIO_BUCKET: foodingo-data-lake
+      MINIO_ENDPOINT: https://s3.us-east-1.amazonaws.com
+      MINIO_ACCESS_KEY: ${AWS_ACCESS_KEY}
+      MINIO_SECRET_KEY: ${AWS_SECRET_KEY}
+      MINIO_BUCKET: ${AWS_DATALAKE_BUCKET}
     networks:
       - foodingo-pipeline
     restart: unless-stopped
@@ -432,8 +432,10 @@ services:
     environment:
       - JUPYTER_ENABLE_LAB=yes
       - JUPYTER_TOKEN=foodingo123
-      - AWS_ACCESS_KEY_ID=${MINIO_ACCESS_KEY:-foodingo}
-      - AWS_SECRET_ACCESS_KEY=${MINIO_SECRET_KEY:-foodingo123}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_KEY}
+      - AWS_DATALAKE_BUCKET=${AWS_DATALAKE_BUCKET}
+      - AWS_DATALAKE_REGION=${AWS_DATALAKE_REGION}
     ports:
       - "8888:8888"  # Jupyter Lab UI
       - "4040:4040"  # Spark Job UI

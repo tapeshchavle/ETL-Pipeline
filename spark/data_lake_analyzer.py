@@ -12,6 +12,11 @@ import os
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, sum, count, desc
 
+aws_access_key = os.getenv("AWS_ACCESS_KEY_ID", "")
+aws_secret_key = os.getenv("AWS_SECRET_ACCESS_KEY", "")
+aws_bucket = os.getenv("AWS_DATALAKE_BUCKET", "foodingo-data-lake")
+aws_region = os.getenv("AWS_DATALAKE_REGION", "us-east-1")
+
 def create_spark_session():
     print("Initializing Spark Session...")
     
@@ -20,12 +25,11 @@ def create_spark_session():
         .appName("Foodingo Data Lake Analyzer") \
         .master("local[*]") \
         .config("spark.jars.packages", "org.apache.hadoop:hadoop-aws:3.3.4,com.amazonaws:aws-java-sdk-bundle:1.12.262") \
-        .config("spark.hadoop.fs.s3a.endpoint", "http://minio:9000") \
-        .config("spark.hadoop.fs.s3a.access.key", "foodingo") \
-        .config("spark.hadoop.fs.s3a.secret.key", "foodingo123") \
-        .config("spark.hadoop.fs.s3a.path.style.access", "true") \
+        .config("spark.hadoop.fs.s3a.endpoint", f"https://s3.{aws_region}.amazonaws.com") \
+        .config("spark.hadoop.fs.s3a.access.key", aws_access_key) \
+        .config("spark.hadoop.fs.s3a.secret.key", aws_secret_key) \
+        .config("spark.hadoop.fs.s3a.path.style.access", "false") \
         .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem") \
-        .config("spark.hadoop.fs.s3a.connection.ssl.enabled", "false") \
         .getOrCreate()
         
     # Reduce logging verbosity
@@ -39,11 +43,11 @@ def analyze_data_lake():
     
     try:
         print("Connected to Spark Master successfully!")
-        print("Reading Parquet data lake files from S3 (s3a://foodingo-data-lake/raw/events/order/created/)...")
+        print(f"Reading Parquet data lake files from S3 (s3a://{aws_bucket}/raw/events/order/created/)...")
         
         # We read the entire folder of Parquet files. Spark automatically discovers the Hive partitions!
         # (e.g. year=2026/month=07/day=24)
-        orders_df = spark.read.parquet("s3a://foodingo-data-lake/raw/events/order/created/")
+        orders_df = spark.read.parquet(f"s3a://{aws_bucket}/raw/events/order/created/")
         
         print("\n--- Raw Data Lake Schema ---")
         orders_df.printSchema()
