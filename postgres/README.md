@@ -8,6 +8,8 @@ The database is organized into **two schemas**:
 - **`raw`** — Raw event data ingested from Kafka (written by the Python consumer)
 - **`analytics`** — Cleaned, transformed, business-ready tables (written by dbt)
 
+> **🧠 Note on Big Data Limit:** PostgreSQL serves as the "Hot Path" for daily reporting and fast Metabase dashboards. If data volume exceeds PostgreSQL's single-node capacity (e.g., billions of rows), data scientists bypass PostgreSQL entirely and use the **Apache Spark** cluster to query the S3 Data Lake directly.
+
 ---
 
 ## Schema Architecture

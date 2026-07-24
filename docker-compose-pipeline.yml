@@ -424,3 +424,20 @@ services:
       MB_DB_HOST: postgres
     networks:
       - foodingo-pipeline
+
+# ─── APACHE SPARK (BIG DATA PATH) ─────────────────────────────────────────────
+  spark-jupyter:
+    image: jupyter/pyspark-notebook:latest
+    container_name: foodingo-spark-jupyter
+    environment:
+      - JUPYTER_ENABLE_LAB=yes
+      - JUPYTER_TOKEN=foodingo123
+      - AWS_ACCESS_KEY_ID=${MINIO_ACCESS_KEY:-foodingo}
+      - AWS_SECRET_ACCESS_KEY=${MINIO_SECRET_KEY:-foodingo123}
+    ports:
+      - "8888:8888"  # Jupyter Lab UI
+      - "4040:4040"  # Spark Job UI
+    volumes:
+      - ./spark:/home/jovyan/work/spark
+    networks:
+      - foodingo-pipeline

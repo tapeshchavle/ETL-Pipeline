@@ -66,35 +66,46 @@
 │                        │  ┌──────────────┐  ┌────────────────┐  │           │
 │                        │  │ PostgreSQL   │  │ MinIO / S3     │  │           │
 │                        │  │ raw schema   │  │ Parquet files  │  │           │
-│                        │  └──────┬───────┘  └────────────────┘  │           │
-│                        └─────────┼───────────────────────────────┘           │
+│                        │  └──────┬───────┘  └───────┬────────┘  │           │
+│                        └─────────┼──────────────────┼───────────┘           │
+│                                  │                  │                       │
+│                        ┌─────────▼────────┐  ┌──────▼─────────────┐         │
+│                        │  Apache Airflow  │  │  Apache Spark      │         │
+│                        │  Runs dbt daily  │  │  Big Data Cluster  │         │
+│                        │                  │  │  s3a:// analytics  │         │
+│                        │  ┌────────────┐  │  └──────┬─────────────┘         │
+│                        │  │    dbt     │  │         │                       │
+│                        │  └──────┬─────┘  │         │                       │
+│                        └─────────┼────────┘         │                       │
+│                                  │                  │                       │
+│                        ┌─────────▼────────┐  ┌──────▼─────────────┐         │
+│                        │  PostgreSQL      │  │ Jupyter Notebook   │         │
+│                        │  analytics       │  │ PySpark UI         │         │
+│                        └─────────┬────────┘  └────────────────────┘         │
 │                                  │                                          │
-│                        ┌─────────▼───────────────────────────────┐           │
-│                        │  Apache Airflow (DAG Scheduler)         │           │
-│                        │  Runs dbt transforms daily at 2 AM IST  │           │
-│                        │                                         │           │
-│                        │  ┌──────────────────────────────────┐   │           │
-│                        │  │    dbt (Data Build Tool)          │   │           │
-│                        │  │    staging → facts → marts        │   │           │
-│                        │  │    10 SQL models                  │   │           │
-│                        │  └──────────────┬───────────────────┘   │           │
-│                        └─────────────────┼───────────────────────┘           │
-│                                          │                                  │
-│                        ┌─────────────────▼───────────────────────┐           │
-│                        │    PostgreSQL analytics schema           │           │
-│                        │    fact_orders, daily_revenue,           │           │
-│                        │    food_popularity, cart_abandonment,    │           │
-│                        │    user_funnel, ml_user_order_matrix     │           │
-│                        └───────────┬────────────┬────────────────┘           │
-│                                    │            │                            │
-│                        ┌───────────▼──┐  ┌──────▼───────────────┐           │
-│                        │  Metabase    │  │  FastAPI ML Service  │           │
-│                        │  BI Dashboards│  │  Recommender + Churn │           │
-│                        │  :3000       │  │  :5001               │           │
-│                        └──────────────┘  └──────────────────────┘           │
+│                        ┌─────────▼────────┐  ┌────────────────────┐         │
+│                        │  Metabase BI     │  │ FastAPI ML Service │         │
+│                        │  Dashboards      │  │ Recommender/Churn  │         │
+│                        └──────────────────┘  └────────────────────┘         │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
+
+---
+
+## 🧠 The Lambda Architecture (PostgreSQL vs Apache Spark)
+
+Foodingo implements a **Lambda Architecture** to handle both operational reporting and massive Big Data compute without ever slowing down the live application.
+
+1. **The Application Database (MongoDB):** 
+   This is the live database powering the Spring Boot backend. It is purely for real-time CRUD operations.
+   
+2. **The "Hot Path" (PostgreSQL + dbt):** 
+   PostgreSQL acts as the analytical data warehouse. It is incredibly fast for everyday business intelligence (Metabase dashboards on gigabytes of data). However, as a single-node server, it has a hard limit on how much data it can process quickly.
+   
+3. **The "Cold/Big Data Path" (MinIO S3 + Apache Spark):** 
+   If Foodingo grows to **billions of rows** (Terabytes of data), a single PostgreSQL server will choke. To solve this, the Kafka Consumer constantly backs up all events as compressed **Apache Parquet files** into the MinIO (S3) Data Lake. 
+   When data scientists need to process these billions of rows, they use **Apache Spark**. Spark is a *distributed compute engine* (with no hard drive of its own). It reads the raw data directly from the S3 data lake and spreads the math across multiple worker nodes in memory, completely bypassing PostgreSQL. This guarantees that massive machine learning jobs never slow down your daily operations!
 
 ---
 
@@ -122,8 +133,10 @@
 | **Debezium** | 2.5 | MongoDB Change Data Capture |
 | **Kafka Connect** | Debezium 2.5 | Connector framework for CDC |
 | **Python Kafka Consumer** | kafka-python | Event consumption + ETL |
-| **PostgreSQL** | 15-alpine | Analytical data warehouse |
-| **MinIO** | latest | S3-compatible data lake |
+| **PostgreSQL** | 15-alpine | Analytical data warehouse (Hot Path) |
+| **MinIO** | latest | S3-compatible data lake (Cold Path) |
+| **Apache Spark** | 3.5.1 | Big Data distributed analytics on MinIO |
+| **Jupyter** | PySpark 3.5 | Interactive data lake querying UI |
 | **Apache Airflow** | 2.9.1 | Workflow orchestration (DAGs) |
 | **dbt (Data Build Tool)** | 1.7.9 | SQL-based data transformations |
 | **FastAPI** | latest | ML model serving API |

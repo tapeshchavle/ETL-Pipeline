@@ -40,6 +40,13 @@ Python Kafka Consumer
 │  User: foodingo                              │
 │  Password: foodingo123                       │
 └─────────────────────────────────────────────┘
+       │
+       │  s3a:// PySpark Read
+       ▼
+┌─────────────────────────────────────────────┐
+│    Apache Spark (foodingo-spark-jupyter)     │
+│    Reads Parquet for Distributed Analytics   │
+└─────────────────────────────────────────────┘
 ```
 
 ---
