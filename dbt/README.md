@@ -1,10 +1,10 @@
-# 🔧 dbt (Data Build Tool) — SQL Transformations
+# 🔧 dbt (Data Build Tool) — SQL Transformations & Modeling
 
 ## Overview
 
-dbt (Data Build Tool) is the **transformation layer** of Foodingo's data pipeline. It takes the messy, raw event data in PostgreSQL's `raw` schema and transforms it into clean, business-ready analytics tables in the `analytics` schema — using nothing but **SQL**.
+dbt (Data Build Tool) is the **transformation layer (the "T" in ETL/ELT)** of Foodingo's data engineering pipeline. 
 
-dbt follows a **3-layer architecture**: Staging → Facts → Marts, where each layer builds on the previous one using `{{ ref() }}` references. This creates a clean **DAG (Directed Acyclic Graph)** of dependencies.
+While the Python Kafka Consumer ingests raw event data into PostgreSQL's `raw` schema, those tables contain duplicate retried events, raw timestamps, and unaggregated JSON strings. **dbt transforms this messy raw data into clean, dimensional, business-ready analytical tables in the `analytics` schema — using nothing but modular SQL.**
 
 ---
 
@@ -12,132 +12,160 @@ dbt follows a **3-layer architecture**: Staging → Facts → Marts, where each 
 
 | Requirement | How dbt Solves It |
 |---|---|
-| **SQL-only transforms** | Data engineers write SQL, not Python/Spark |
-| **Version control** | Models are `.sql` files tracked in Git |
-| **Dependency management** | `{{ ref('stg_orders') }}` auto-resolves execution order |
-| **Incremental builds** | Only rebuild what changed |
-| **Testing** | Built-in `dbt test` for data quality checks |
-| **Documentation** | Auto-generates docs from schema definitions |
+| **SQL-First Engineering** | Analysts and Data Engineers write SELECT queries; dbt handles DDL (`CREATE TABLE/VIEW`) |
+| **Dependency Management** | `{{ ref('stg_orders') }}` syntax automatically builds a Directed Acyclic Graph (DAG) |
+| **Version Control** | Data models are text `.sql` files tracked in Git alongside application code |
+| **Automated Testing** | Built-in data quality tests (`unique`, `not_null`, `accepted_values`) run in CI/CD |
+| **Incremental Processing** | Only transforms newly arrived rows instead of rebuilding entire historical tables |
 
 ---
 
-## 3-Layer Architecture
+## The 3-Layer Architecture in Foodingo
 
 ```
-           RAW SCHEMA (PostgreSQL)
-           ┌─────────────────────┐
-           │  raw.user_events    │
-           │  raw.cart_events    │
-           │  raw.order_events   │
-           │  raw.cdc_events     │
-           └─────────┬───────────┘
-                     │
-        ═════════════╪═══════════════
-        ║   STAGING LAYER (Views)   ║
-        ═════════════╪═══════════════
-                     │
-           ┌─────────▼───────────┐
-           │  stg_orders (VIEW)  │──── Deduplicates by (order_id, event_type)
-           │  stg_cart   (VIEW)  │──── Cleans cart events, extracts date/hour
-           │  stg_users  (VIEW)  │──── Cleans user events
-           └─────────┬───────────┘
-                     │
-        ═════════════╪═══════════════
-        ║    FACT LAYER (Tables)    ║
-        ═════════════╪═══════════════
-                     │
-           ┌─────────▼───────────┐
-           │  fact_orders (TABLE)│──── One row per paid order
-           │  fact_cart   (TABLE)│──── One row per cart interaction
-           └─────────┬───────────┘
-                     │
-        ═════════════╪═══════════════
-        ║    MART LAYER (Tables)    ║
-        ═════════════╪═══════════════
-                     │
-           ┌─────────▼───────────────────────┐
-           │  daily_revenue       (TABLE)     │──── Revenue metrics per day
-           │  food_popularity     (TABLE)     │──── Order count per food item
-           │  cart_abandonment    (TABLE)     │──── Users at risk of churning
-           │  user_funnel         (TABLE)     │──── Registration→Order conversion
-           │  ml_user_order_matrix (TABLE)    │──── Input for ML recommender
-           └─────────────────────────────────┘
+                       RAW SCHEMA (PostgreSQL)
+                       ┌─────────────────────┐
+                       │  raw.user_events    │
+                       │  raw.cart_events    │
+                       │  raw.order_events   │
+                       │  raw.cdc_events     │
+                       └──────────┬──────────┘
+                                  │
+         ═════════════════════════╪═════════════════════════
+         ║               STAGING LAYER (Views)             ║
+         ═════════════════════════╪═════════════════════════
+                                  │
+                       ┌──────────▼──────────┐
+                       │ stg_orders   (VIEW) │── Deduplicates retried order events
+                       │ stg_cart     (VIEW) │── Cleans cart events & parses dates
+                       │ stg_users    (VIEW) │── Cleans user registrations
+                       └──────────┬──────────┘
+                                  │
+         ═════════════════════════╪═════════════════════════
+         ║               FACT LAYER (Tables)               ║
+         ═════════════════════════╪═════════════════════════
+                                  │
+                       ┌──────────▼──────────┐
+                       │ fact_orders (TABLE) │── Immutable paid order history
+                       │ fact_cart   (TABLE) │── Cleaned cart interaction history
+                       └──────────┬──────────┘
+                                  │
+         ═════════════════════════╪═════════════════════════
+         ║               MART LAYER (Tables)               ║
+         ═════════════════════════╪═════════════════════════
+                                  │
+         ┌────────────────────────┼────────────────────────┐
+         ▼                        ▼                        ▼
+┌─────────────────┐     ┌───────────────────┐     ┌──────────────────┐
+│  daily_revenue  │     │  food_popularity  │     │ cart_abandonment │
+│  (CEO Revenue)  │     │  (JSONB Explode)  │     │ (ML Churn Risk)  │
+└─────────────────┘     └───────────────────┘     └──────────────────┘
+         │                                                 │
+         └────────────────────────┬────────────────────────┘
+                                  ▼
+                    ┌──────────────────────────┐
+                    │   ml_user_order_matrix   │
+                    │   (ML Collab Filter)     │
+                    └──────────────────────────┘
 ```
 
 ---
 
-## Model Details
+## 🔬 How dbt Works Internally — Step by Step
 
-### Staging Layer (3 Views)
+Let's trace what happens when Airflow executes `dbt run`:
 
-Views are **not materialized** — they execute on-the-fly, always reflecting the latest raw data.
+### Step 1: Compilation & DAG Construction
+Before a single query touches PostgreSQL, dbt scans all `.sql` files inside `/dbt/models/` and parses Jinja macros:
+- It finds `{{ ref('stg_orders') }}` inside `fact_orders.sql`.
+- It builds a topological **Execution Graph (DAG)** to guarantee that Staging Views are created before Fact Tables, and Fact Tables before Marts.
 
-#### `stg_orders.sql`
-- **Source:** `raw.order_events`
-- **Logic:** Deduplicates by `(order_id, event_type)` using `ROW_NUMBER()` window function — keeps only the most recent event per order
-- **Why?** If a payment is retried, the same `order_id` might appear multiple times
-
-#### `stg_cart.sql`
-- **Source:** `raw.cart_events`
-- **Logic:** Cleans and standardizes cart events, extracts `event_date` and `event_hour`
-
-#### `stg_users.sql`
-- **Source:** `raw.user_events`
-- **Logic:** Cleans user registration and login events
-
-### Fact Layer (2 Tables)
-
-#### `fact_orders.sql`
+### Step 2: Executing Staging Models as SQL Views (`stg_*`)
+Staging models are configured as `materialized='view'`. dbt executes SQL directly against PostgreSQL:
 ```sql
-SELECT
-    order_id, user_id, amount, payment_status, order_status,
-    ordered_items,                              -- JSONB array kept for downstream
-    jsonb_array_length(ordered_items) AS item_count,
-    DATE(event_timestamp)            AS order_date,
-    EXTRACT(HOUR FROM event_timestamp) AS order_hour
-FROM stg_orders
-WHERE event_type = 'order.created' AND payment_status IS NOT NULL
+CREATE OR REPLACE VIEW analytics.stg_orders AS (
+    WITH ranked AS (
+        SELECT *,
+               ROW_NUMBER() OVER (PARTITION BY order_id, event_type ORDER BY event_timestamp DESC) as rn
+        FROM raw.order_events
+    )
+    SELECT * FROM ranked WHERE rn = 1
+);
+```
+- **Why `ROW_NUMBER()`?** If an order payment fails and is retried, `raw.order_events` might contain two entries for the same `order_id`. Staging deduplicates them dynamically.
+
+### Step 3: Executing Fact Models as Tables (`fact_*`)
+Fact models are configured as `materialized='table'`. dbt executes a **CREATE TABLE AS SELECT (CTAS)** query:
+```sql
+CREATE TABLE analytics.fact_orders AS (
+    SELECT
+        order_id, user_id, amount, payment_status, order_status,
+        ordered_items,                              -- Preserved JSONB array
+        jsonb_array_length(ordered_items) AS item_count,
+        DATE(event_timestamp)             AS order_date,
+        EXTRACT(HOUR FROM event_timestamp) AS order_hour
+    FROM analytics.stg_orders
+    WHERE event_type = 'order.created' AND payment_status IS NOT NULL
+);
 ```
 
-**Key insight:** `ordered_items` (the JSONB array of food items) is preserved in the fact table so that downstream marts can explode it using `jsonb_array_elements()`.
-
-#### `fact_cart_events.sql`
-- Cleans cart interactions with date/hour extraction for time-series analysis
-
-### Mart Layer (5 Tables)
-
-#### `daily_revenue.sql`
-Aggregates orders by date → `total_revenue`, `order_count`, `avg_order_value`, `unique_users`
-
-#### `food_popularity.sql`
-Explodes `ordered_items` JSONB array → counts orders per food item → `order_count`, `total_revenue`, `avg_price`
-
+### Step 4: JSONB Array Exploding in Marts (`food_popularity`)
+In MongoDB and `raw.order_events`, items are nested arrays. To compute item-level revenue in `analytics.food_popularity`, dbt uses PostgreSQL's native `jsonb_array_elements()` function:
 ```sql
 WITH exploded AS (
     SELECT order_id, amount,
            jsonb_array_elements(ordered_items) AS item
-    FROM fact_orders WHERE payment_status = 'paid'
+    FROM analytics.fact_orders WHERE payment_status = 'paid'
 )
 SELECT
     item->>'foodId'    AS food_id,
     item->>'name'      AS food_name,
     COUNT(*)           AS order_count,
     SUM((item->>'price')::DECIMAL * (item->>'quantity')::INT) AS total_revenue
-FROM exploded GROUP BY food_id, food_name
+FROM exploded
+GROUP BY 1, 2;
 ```
-
-#### `cart_abandonment.sql`
-Identifies users who added to cart but didn't place an order → `days_since_cart`, `has_ordered_after`
-
-#### `user_funnel.sql`
-Daily conversion funnel: `registered_users` → `logged_in_users` → `cart_added_users` → `ordered_users` with `reg_to_order_rate` percentage
-
-#### `ml_user_order_matrix.sql`
-Creates a user × food matrix: `(user_id, food_id, order_count)` — this is the direct input for the ML recommender's collaborative filtering algorithm
+- This flattens the nested JSON on-the-fly, transforming document-style data into relational rows for Metabase!
 
 ---
 
-## Configuration
+## 🔗 How dbt Interacts With Other Components
+
+```
+┌───────────────────────────────────────┐
+│     Apache Airflow (:8089)            │
+│     DAG: foodingo_daily_pipeline       │
+└──────────────────┬────────────────────┘
+                   │ Triggers nightly: dbt run --select staging/facts/marts
+                   ▼
+┌───────────────────────────────────────┐
+│     dbt CLI (Inside Airflow Worker)   │
+│     Configuration: dbt_project.yml    │
+└──────────────────┬────────────────────┘
+                   │ Executes DDL & SELECT queries via JDBC/psycopg2
+                   ▼
+┌───────────────────────────────────────┐
+│     PostgreSQL 15 (:5432)             │
+│     Reads: raw.* schema               │
+│     Writes: analytics.* schema        │
+└──────────────────┬────────────────────┘
+                   │
+         ┌─────────┴─────────┐
+         │ SQL READ          │ SQL READ
+         ▼                   ▼
+┌─────────────────┐ ┌───────────────────┐
+│ Metabase (:3000)│ │ ML Service (:5001)│
+│ CEO BI Dashboards│ │ FastAPI Training │
+└─────────────────┘ └───────────────────┘
+```
+
+1. **Apache Airflow:** Schedules and executes `dbt run` commands sequentially via `BashOperator` every night at 2:00 AM IST.
+2. **PostgreSQL:** Serves as both the input source (`raw` schema) and the destination (`analytics` schema).
+3. **Metabase & ML Service:** Consumers that read the resulting mart tables (`daily_revenue`, `ml_user_order_matrix`, `cart_abandonment`).
+
+---
+
+## Project Configuration
 
 ### `dbt_project.yml`
 ```yaml
@@ -146,11 +174,11 @@ profile: 'foodingo'
 models:
   foodingo:
     staging:
-      +materialized: view      # Always fresh, no storage cost
+      +materialized: view      # Always fresh, zero disk space cost
     facts:
-      +materialized: table     # Pre-computed for fast queries
+      +materialized: table     # Pre-computed for fast BI queries
     marts:
-      +materialized: table     # Pre-computed for dashboards + ML
+      +materialized: table     # Pre-aggregated for instant Metabase UI loading
 ```
 
 ### `profiles.yml`
@@ -165,81 +193,91 @@ foodingo:
       user: "{{ env_var('POSTGRES_USER', 'foodingo') }}"
       password: "{{ env_var('POSTGRES_PASSWORD', 'foodingo123') }}"
       dbname: "{{ env_var('POSTGRES_DB', 'foodingo_warehouse') }}"
-      schema: analytics     # All models go into the analytics schema
-      threads: 2
+      schema: analytics     # Target destination schema
+      threads: 2            # Concurrent SQL execution threads
 ```
 
 ---
 
-## dbt DAG (Dependency Graph)
+## 📈 Scalability & Current Configuration
 
-```
-stg_orders ─────┐
-                ├──▶ fact_orders ─────┬──▶ daily_revenue
-stg_users ──────┤                    ├──▶ food_popularity
-                │                    ├──▶ ml_user_order_matrix
-                │                    │
-stg_cart ───────┴──▶ fact_cart_events ├──▶ cart_abandonment
-                                     └──▶ user_funnel
+### Current Setup
+| Setting | Value | Why |
+|---|---|---|
+| Materialization | Views (Staging), Tables (Facts/Marts) | Balances storage overhead against BI dashboard query performance |
+| Threads | 2 concurrent queries | Suitable for single PostgreSQL Docker container |
+| Orchestration | Airflow `BashOperator` | Complete automation without manual CLI intervention |
+| Execution Time | ~3 seconds | Extremely fast for current development dataset sizes |
+
+---
+
+## 🚀 Future Scaling Guide
+
+When Foodingo's database grows to millions of orders, implement these enterprise dbt scaling techniques:
+
+### Level 1: Incremental Models (`materialized='incremental'`)
+Currently, `fact_orders` drops and recreates the entire table every night (`CREATE TABLE AS`). At 10 million rows, full rebuilds take too long.
+- Convert `fact_orders.sql` to an **Incremental Model**:
+  ```sql
+  {{ config(materialized='incremental', unique_key='order_id') }}
+  
+  SELECT ... FROM {{ ref('stg_orders') }}
+  {% if is_incremental() %}
+    -- Only process records newer than the most recent timestamp in the table
+    WHERE event_timestamp > (SELECT max(event_timestamp) FROM {{ this }})
+  {% endif %}
+  ```
+- **Impact:** Rebuild time drops from 10 minutes to **10 seconds**, processing only the new orders from that day.
+
+### Level 2: Parallel Thread Tuning (`threads: 4` or `8`)
+In `profiles.yml`, increase `threads` from `2` to `4` or `8`.
+- Allows dbt to build independent branches of the DAG simultaneously (e.g., building `daily_revenue` and `cart_abandonment` concurrently).
+
+### Level 3: Data Quality Testing (`dbt test`)
+In production, prevent bad data from reaching executive dashboards by adding schema tests in a `schema.yml` file:
+```yaml
+models:
+  - name: fact_orders
+    columns:
+      - name: order_id
+        tests:
+          - unique
+          - not_null
+      - name: amount
+        tests:
+          - dbt_utils.expression_is_true:
+              expression: ">= 0" # Orders cannot have negative revenue
 ```
 
 ---
 
-## Directory Structure
-
-```
-dbt/
-├── dbt_project.yml          # Project configuration
-├── profiles.yml             # PostgreSQL connection profile
-├── models/
-│   ├── staging/
-│   │   ├── stg_orders.sql   # Deduplicated orders view
-│   │   ├── stg_cart.sql     # Cleaned cart events view
-│   │   └── stg_users.sql    # Cleaned user events view
-│   ├── facts/
-│   │   ├── fact_orders.sql  # Core order fact table
-│   │   └── fact_cart_events.sql  # Core cart fact table
-│   └── marts/
-│       ├── daily_revenue.sql         # Revenue by date
-│       ├── food_popularity.sql       # Order count per food
-│       ├── cart_abandonment.sql      # Churn risk users
-│       ├── user_funnel.sql           # Conversion funnel
-│       └── ml_user_order_matrix.sql  # ML input matrix
-├── seeds/                   # (empty — static data would go here)
-├── tests/                   # (empty — custom tests would go here)
-└── macros/                  # (empty — reusable SQL macros would go here)
-```
-
----
-
-## Running dbt Manually
+## Useful Commands
 
 ```bash
-# Run all models
-docker exec -i foodingo-airflow-webserver bash -c \
+# Execute all dbt models manually inside the Airflow Webserver container
+docker exec -it foodingo-airflow-webserver bash -c \
   "POSTGRES_HOST=postgres POSTGRES_PORT=5432 POSTGRES_DB=foodingo_warehouse \
    POSTGRES_USER=foodingo POSTGRES_PASSWORD=foodingo123 \
    dbt run --profiles-dir /opt/airflow/dbt --project-dir /opt/airflow/dbt"
 
-# Run only staging models
-dbt run --select staging
+# Execute only the staging models
+docker exec -it foodingo-airflow-webserver bash -c \
+  "dbt run --profiles-dir /opt/airflow/dbt --project-dir /opt/airflow/dbt --select staging"
 
-# Run only marts
-dbt run --select marts
+# Execute only the marts models
+docker exec -it foodingo-airflow-webserver bash -c \
+  "dbt run --profiles-dir /opt/airflow/dbt --project-dir /opt/airflow/dbt --select marts"
 
-# Run tests
-dbt test --profiles-dir /opt/airflow/dbt --project-dir /opt/airflow/dbt
-
-# Generate documentation
-dbt docs generate
-dbt docs serve
+# Run built-in dbt data tests
+docker exec -it foodingo-airflow-webserver bash -c \
+  "dbt test --profiles-dir /opt/airflow/dbt --project-dir /opt/airflow/dbt"
 ```
 
 ---
 
 ## Learn More
 
-- [dbt Documentation](https://docs.getdbt.com/)
-- [dbt Best Practices](https://docs.getdbt.com/guides/best-practices)
-- [Jinja Templating in dbt](https://docs.getdbt.com/docs/build/jinja-macros)
+- [dbt Official Documentation](https://docs.getdbt.com/)
+- [dbt Incremental Models Guide](https://docs.getdbt.com/docs/build/incremental-models)
+- [dbt Jinja Macros Reference](https://docs.getdbt.com/docs/build/jinja-macros)
 - [PostgreSQL JSONB Functions](https://www.postgresql.org/docs/15/functions-json.html)

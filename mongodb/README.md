@@ -42,6 +42,123 @@ MongoDB Server (localhost:27017)
 
 ---
 
+## 🔬 How MongoDB Works Internally in Foodingo
+
+### Step 1: Spring Boot Maps Java Objects to BSON
+
+When a user places an order, Spring Boot creates an `OrderEntity` Java object:
+
+```java
+@Document(collection = "orders")
+public class OrderEntity {
+    @Id
+    private String id;           // Maps to MongoDB's _id
+    private String userId;
+    private String userAddress;
+    private double amount;
+    private List<OrderItem> orderedItems;  // Embedded array
+    private String paymentStatus;
+    private String orderStatus;
+    private String razorpayOrderId;
+    // ...
+}
+```
+
+When `orderRepo.save(orderEntity)` is called, Spring Data MongoDB:
+1. Serializes the Java object to **BSON** (Binary JSON) using Jackson
+2. Sends the BSON bytes over MongoDB's wire protocol to `localhost:27017`
+3. MongoDB stores the BSON document in the `foodies.orders` collection
+
+### Step 2: MongoDB Stores on Disk (WiredTiger)
+
+MongoDB uses the **WiredTiger** storage engine:
+- Documents are stored as compressed BSON on disk inside `/data/db/` (mapped to `mongo-data` Docker volume)
+- WiredTiger uses **document-level locking** — two users placing orders simultaneously don't block each other
+- Writes go to an in-memory write-ahead log (WAL) first, then flushed to disk (crash-safe)
+
+### Step 3: MongoDB Writes to the Oplog
+
+Because MongoDB runs as a Replica Set (`rs0`), every write also gets appended to the **oplog** (`local.oplog.rs`). The oplog is a capped collection that records:
+```javascript
+{
+  "ts": Timestamp(1721822400, 1),      // When the write happened
+  "op": "i",                           // "i" = insert, "u" = update, "d" = delete
+  "ns": "foodies.orders",              // Database.Collection
+  "o": { "_id": "abc123", ... }        // The actual document
+}
+```
+
+This oplog is what Debezium reads via Change Streams to capture every database change in real-time.
+
+---
+
+## 🔗 How MongoDB Interacts With Other Components
+
+```
+┌───────────────────────────────────────────────────────────────┐
+│ SPRING BOOT (Host Machine :8080)                              │
+│                                                               │
+│  UserServiceImpl.java                                         │
+│    └─ userRepo.save(user) ──────────────────────────────┐     │
+│  CartServiceImpl.java                                    │     │
+│    └─ cartRepo.save(cartItem) ──────────────────────┐    │     │
+│  OrderServiceImpl.java                               │    │     │
+│    └─ orderRepo.save(order) ────────────────────┐    │    │     │
+│  FoodServiceImpl.java                            │    │    │     │
+│    └─ foodRepo.save(food) ─────────────────┐     │    │    │     │
+└─────────────────────────────────────────────┼─────┼────┼────┼───┘
+                                              │     │    │    │
+                                              ▼     ▼    ▼    ▼
+┌────────────────────────────────────────────────────────────────┐
+│ MONGODB (Docker: foodingo-mongodb :27017)                      │
+│                                                                │
+│  Replica Set: rs0 (single member for dev)                      │
+│                                                                │
+│  foodies.food ◀────── FoodServiceImpl                          │
+│  foodies.users ◀───── UserServiceImpl                          │
+│  foodies.carts ◀───── CartServiceImpl                          │
+│  foodies.orders ◀──── OrderServiceImpl                         │
+│                                                                │
+│  oplog (local.oplog.rs) ─── records every write ───┐           │
+└────────────────────────────────────────────────────┼───────────┘
+                                                     │
+                                                     │ Change Streams
+                                                     ▼
+┌────────────────────────────────────────────────────────────────┐
+│ DEBEZIUM (Docker: foodingo-kafka-connect :8083)                │
+│                                                                │
+│  Reads Change Stream for 4 collections                         │
+│  Publishes to Kafka topics:                                    │
+│    foodies.orders → foodingo.foodies.orders                    │
+│    foodies.users  → foodingo.foodies.users                     │
+│    foodies.food   → foodingo.foodies.food                      │
+│    foodies.carts  → foodingo.foodies.carts                     │
+└────────────────────────────────────────────────────────────────┘
+                          │
+                          ▼
+                    Apache Kafka → Python Consumer → PostgreSQL + AWS S3
+```
+
+### The Dual-Path Data Flow
+
+When a user places an order, MongoDB is involved in **two parallel data flows**:
+
+**Path 1 (Explicit — Spring Boot Kafka Events):**
+```
+OrderServiceImpl.java → saves to MongoDB → publishes "order.created" to Kafka
+```
+Spring Boot explicitly calls `kafkaPublishingService.publish()` after saving to MongoDB. This is a high-level business event with a clean JSON schema.
+
+**Path 2 (Implicit — Debezium CDC):**
+```
+MongoDB oplog → Debezium Change Stream → publishes raw document to Kafka
+```
+Debezium automatically captures the raw MongoDB document without any code changes. This is a low-level database event.
+
+**Why both?** Path 1 gives you clean, structured business events. Path 2 gives you a complete, audit-grade log of every database change (including direct admin updates that bypass Spring Boot).
+
+---
+
 ## Replica Set Configuration
 
 MongoDB **must** run as a Replica Set for CDC to work. In our Docker setup:
@@ -77,23 +194,103 @@ This is an **idempotent** operation — if the replica set is already initialize
 
 ---
 
-## Spring Boot Entity Mapping
+## 📈 Scalability & Current Configuration
 
-```java
-@Document(collection = "orders")
-public class OrderEntity {
-    @Id
-    private String id;
-    private String userId;
-    private String userAddress;
-    private double amount;
-    private List<OrderItem> orderedItems;  // Embedded array
-    private String paymentStatus;
-    private String orderStatus;
-    private String razorpayOrderId;
-    // ...
-}
+### Current Setup
+
+| Setting | Value | Why |
+|---|---|---|
+| MongoDB version | 7.0 | Latest LTS, best Change Streams support |
+| Replica Set | `rs0` with 1 member | Minimum for Change Streams (dev only) |
+| Storage Engine | WiredTiger | Default, best all-around performance |
+| Indexes | Default `_id` only | Sufficient for current CRUD operations |
+| Max document size | 16 MB | MongoDB hard limit — not a problem for orders |
+
+### How Many Documents Can It Handle?
+
+| Metric | Current | Limit |
+|---|---|---|
+| Documents in `orders` | ~100 | No hard limit (tested to billions) |
+| Total database size | ~10 MB | Practical limit: ~500 GB per server |
+| Concurrent connections | ~10 | Default max: 65,536 |
+| Write throughput | ~100 writes/sec | Single node: ~50,000 writes/sec |
+
+---
+
+## 🚀 Future Scaling Guide
+
+### Level 1: Production Replica Set (3 Nodes)
+
+Current setup has 1 MongoDB member (no redundancy). In production:
+
+```yaml
+# Production docker-compose (conceptual)
+mongodb-primary:
+  command: mongod --replSet rs0 --bind_ip_all
+mongodb-secondary-1:
+  command: mongod --replSet rs0 --bind_ip_all
+mongodb-secondary-2:
+  command: mongod --replSet rs0 --bind_ip_all
 ```
+
+```javascript
+rs.initiate({
+  _id: "rs0",
+  members: [
+    { _id: 0, host: "mongodb-primary:27017" },
+    { _id: 1, host: "mongodb-secondary-1:27017" },
+    { _id: 2, host: "mongodb-secondary-2:27017" }
+  ]
+});
+```
+
+**Benefits:**
+- If the primary dies, a secondary auto-promotes to primary (automatic failover)
+- Read queries can be sent to secondaries (`readPreference: "secondaryPreferred"`) to reduce load on primary
+- Debezium can read Change Streams from any member
+
+### Level 2: Sharding (Billions of Orders)
+
+If `foodies.orders` grows to billions of documents:
+
+```javascript
+// Enable sharding on the database
+sh.enableSharding("foodies");
+
+// Shard the orders collection by userId (hashed)
+sh.shardCollection("foodies.orders", { userId: "hashed" });
+```
+
+**Why hash userId?** Hashed sharding distributes documents evenly across shards. Without hashing, all orders from user "Tapesh" would go to the same shard, creating a hotspot.
+
+**⚠️ Important:** When sharding is enabled, Debezium requires `capture.mode: change_streams` (not `change_streams_update_full`) as per Debezium documentation.
+
+### Level 3: MongoDB Atlas (Managed)
+
+For zero-ops management in production, use MongoDB Atlas:
+- Automated backups, scaling, monitoring
+- Multi-region replication
+- Built-in security (TLS, audit logging)
+- The connection string changes from `mongodb://localhost:27017/...` to `mongodb+srv://user:pass@cluster.mongodb.net/...`
+
+---
+
+## Atlas Migration Script
+
+The `migrate-from-atlas.sh` script helps migrate data from MongoDB Atlas (cloud) to local Docker MongoDB:
+
+```bash
+# Usage:
+./mongodb/migrate-from-atlas.sh
+
+# What it does:
+# 1. Connects to Atlas using your MONGODB_URI from .env
+# 2. Dumps all collections from the 'foodies' database
+# 3. Restores them into the local Docker MongoDB
+# 4. Verifies document counts match
+```
+
+This is useful when switching from Atlas to local development or vice versa.
 
 ---
 
@@ -102,6 +299,7 @@ public class OrderEntity {
 | File | Purpose |
 |---|---|
 | `init-replica-set.js` | Initializes the `rs0` replica set (executed by `mongodb-rs-init` container) |
+| `migrate-from-atlas.sh` | Migration script: Atlas cloud → local Docker MongoDB |
 
 ---
 
@@ -120,8 +318,15 @@ docker exec -i foodingo-mongodb mongosh --eval "show dbs"
 # Query orders collection
 docker exec -i foodingo-mongodb mongosh foodies --eval "db.orders.find().pretty()"
 
-# Count documents
-docker exec -i foodingo-mongodb mongosh foodies --eval "db.orders.countDocuments()"
+# Count documents in each collection
+docker exec -i foodingo-mongodb mongosh foodies --eval \
+  "['orders','users','food','carts'].forEach(c => print(c + ': ' + db[c].countDocuments()))"
+
+# View oplog (what Debezium reads)
+docker exec -i foodingo-mongodb mongosh local --eval "db.oplog.rs.find().sort({ts:-1}).limit(5).pretty()"
+
+# Check current connections
+docker exec -i foodingo-mongodb mongosh --eval "db.serverStatus().connections"
 ```
 
 ---
@@ -140,3 +345,5 @@ docker exec -i foodingo-mongodb mongosh foodies --eval "db.orders.countDocuments
 - [MongoDB Documentation](https://www.mongodb.com/docs/)
 - [MongoDB Change Streams](https://www.mongodb.com/docs/manual/changeStreams/)
 - [Spring Data MongoDB](https://spring.io/projects/spring-data-mongodb)
+- [MongoDB Sharding](https://www.mongodb.com/docs/manual/sharding/)
+- [MongoDB Atlas](https://www.mongodb.com/atlas)

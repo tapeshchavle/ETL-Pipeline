@@ -1,18 +1,18 @@
-# 🍕 Foodingo — Full-Stack Food Ordering Platform with Real-Time Data Engineering Pipeline
+# 🍕 Foodingo — Full-Stack Food Ordering Platform with Real-Time Lambda Data Engineering Pipeline
 
-> A production-grade food ordering application built with **Spring Boot 3 + MongoDB** on the backend, a **React** frontend, and a **7-stage real-time data engineering pipeline** powered by Kafka, Debezium CDC, PostgreSQL, dbt, Airflow, a FastAPI ML service, and Metabase dashboards — all orchestrated via Docker Compose.
+> A production-grade, enterprise-scale food ordering application built with **Spring Boot 3 + MongoDB 7** on the backend, a **React** frontend, and a **7-Stage Lambda Data Engineering Pipeline** powered by Apache Kafka, Debezium CDC, PostgreSQL, Apache Parquet / AWS S3 Data Lake, Apache Spark, dbt, Apache Airflow, a FastAPI ML Recommendation Engine, and Metabase BI Dashboards — fully orchestrated via Docker Compose.
 
 ---
 
 ## 📑 Table of Contents
 
-- [High-Level Architecture](#-high-level-architecture)
+- [Enterprise Lambda Architecture](#-enterprise-lambda-architecture)
+- [Master Scalability Roadmap](#-master-scalability-roadmap)
 - [Tech Stack](#-tech-stack)
 - [Repository Structure](#-repository-structure)
-- [Data Flow — The 7 Stages](#-data-flow--the-7-stages)
-- [How Services Interact](#-how-services-interact)
-- [Prerequisites](#-prerequisites)
-- [Quick Start](#-quick-start)
+- [Data Flow — The 7 Stages (Hot Path vs. Cold Path)](#-data-flow--the-7-stages-hot-path-vs-cold-path)
+- [How Services Interact (Data Types & Protocols)](#-how-services-interact-data-types--protocols)
+- [Prerequisites & Quick Start](#-prerequisites--quick-start)
 - [Environment Variables](#-environment-variables)
 - [Service Ports & Dashboards](#-service-ports--dashboards)
 - [Testing the Full Pipeline](#-testing-the-full-pipeline)
@@ -21,91 +21,107 @@
 
 ---
 
-## 🏗 High-Level Architecture
+## 🏗 Enterprise Lambda Architecture
 
 ```
-┌──────────────────────────────────────────────────────────────────────────────┐
-│                          FOODINGO PLATFORM                                  │
-│                                                                              │
-│  ┌─────────────────┐        ┌───────────────────────────────────────────┐    │
-│  │   React Frontend │───────▶│       Spring Boot 3.4 (Java 17)          │    │
-│  │   (User-facing)  │◀───────│       REST API on :8080                  │    │
-│  └─────────────────┘        │                                           │    │
-│                              │  ┌─────────┐ ┌─────────┐ ┌───────────┐  │    │
-│                              │  │  Users   │ │  Cart   │ │  Orders   │  │    │
-│                              │  └────┬─────┘ └────┬────┘ └─────┬─────┘  │    │
-│                              │       │            │            │        │    │
-│                              │       ▼            ▼            ▼        │    │
-│                              │  ┌──────────────────────────────────┐    │    │
-│                              │  │     MongoDB (foodies DB)         │    │    │
-│                              │  │     Primary Data Store           │    │    │
-│                              │  └──────────┬───────────────────────┘    │    │
-│                              │             │                           │    │
-│                              │             │ CDC (Change Data Capture) │    │
-│                              └─────────────┼───────────────────────────┘    │
-│                                            │                                │
-│  ════════════════════════════════════════════════════════════════════════     │
-│  ║                  DATA ENGINEERING PIPELINE                          ║     │
-│  ════════════════════════════════════════════════════════════════════════     │
-│                                            │                                │
-│  ┌──────────────┐     ┌────────────────────▼────────────────────┐           │
-│  │  Spring Boot  │────▶│         Apache Kafka (9092/9094)        │           │
-│  │  (Producers)  │     │    13 Topics • 3 Partitions Each       │           │
-│  └──────────────┘     │                                         │           │
-│                        │  ┌──────────────┐  ┌────────────────┐  │           │
-│  ┌──────────────┐     │  │ App Events   │  │ CDC Events     │  │           │
-│  │  Debezium    │────▶│  │ user.*, cart.*│  │ foodingo.      │  │           │
-│  │  (CDC)       │     │  │ order.*      │  │ foodies.*      │  │           │
-│  └──────────────┘     │  └──────────────┘  └────────────────┘  │           │
-│                        └──────────┬──────────────────────────────┘           │
-│                                   │                                         │
-│                        ┌──────────▼──────────────────────────────┐           │
-│                        │     Python Kafka Consumer               │           │
-│                        │     (consumer.py)                       │           │
-│                        │                                         │           │
-│                        │  ┌──────────────┐  ┌────────────────┐  │           │
-│                        │  │ PostgreSQL   │  │ MinIO / S3     │  │           │
-│                        │  │ raw schema   │  │ Parquet files  │  │           │
-│                        │  └──────┬───────┘  └───────┬────────┘  │           │
-│                        └─────────┼──────────────────┼───────────┘           │
-│                                  │                  │                       │
-│                        ┌─────────▼────────┐  ┌──────▼─────────────┐         │
-│                        │  Apache Airflow  │  │  Apache Spark      │         │
-│                        │  (Orchestrator)  │─▶│  Big Data Cluster  │         │
-│                        │                  │  │  s3a:// analytics  │         │
-│                        │  ┌────────────┐  │  └──────┬─────────────┘         │
-│                        │  │    dbt     │  │         │                       │
-│                        │  └──────┬─────┘  │         │ Trains AI Models      │
-│                        └─────────┼────────┘         │                       │
-│                                  │                  │                       │
-│                        ┌─────────▼────────┐         │                       │
-│                        │  PostgreSQL      │         │                       │
-│                        │  analytics       │         │                       │
-│                        └─────────┬────────┘         │                       │
-│                                  │                  │                       │
-│                        ┌─────────▼────────┐  ┌──────▼─────────────┐         │
-│                        │  Metabase BI     │  │ FastAPI ML Service │         │
-│                        │  Dashboards      │  │ Recommender/Churn  │         │
-│                        └──────────────────┘  └────────────────────┘         │
-│                                                                              │
-└──────────────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                             FOODINGO WEB APPLICATION                                            │
+│                                                                                                                 │
+│  ┌─────────────────────────┐          ┌──────────────────────────────────────────────────────────────────────┐  │
+│  │     React Frontend      │─────────▶│                    Spring Boot 3.4.4 (Java 17)                       │  │
+│  │     (User Interface)    │◀─────────│                    REST API on port :8080                            │  │
+│  └─────────────────────────┘          └──────────────────────────────────┬───────────────────────────────────┘  │
+│                                                                          │                                      │
+│                                         [REST JSON / BSON]               │ [Spring Kafka JSON / TCP]            │
+│                                         ▼                                ▼                                      │
+│                               ┌───────────────────┐            ┌───────────────────┐                            │
+│                               │  MongoDB 7 (rs0)  │            │   Apache Kafka    │                            │
+│                               │  Primary Database │            │   13 Topics       │                            │
+│                               └─────────┬─────────┘            │   3 Partitions    │                            │
+│                                         │                      └─────────▲─────────┘                            │
+│                                         │ [Change Streams oplog]         │                                      │
+│                                         ▼                                │                                      │
+│                               ┌──────────────────────────────────────────┴─────────┐                            │
+│                               │       Debezium CDC 2.5 (Kafka Connect :8083)       │                            │
+│                               │       Captures raw inserts/updates/deletes         │                            │
+│                               └────────────────────────────────────────────────────┘                            │
+└──────────────────────────────────────────────────────────────────┬──────────────────────────────────────────────┘
+                                                                   │
+                                                                   │ [Kafka Consumer poll() JSON]
+                                                                   ▼
+┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                           PYTHON KAFKA CONSUMER ETL SERVICE (consumer.py / Docker :9092)                        │
+│                                                                                                                 │
+│  • Subscribes to all 13 Kafka topics in consumer group: foodingo-data-pipeline                                  │
+│  • Performs DUAL-WRITE: splits live operational data from long-term immutable Big Data storage                  │
+└──────────────────────┬───────────────────────────────────────────────────────────────────┬──────────────────────┘
+                       │                                                                   │
+                       │ [SQL INSERT / psycopg2]                                           │ [boto3 PUT / .parquet]
+                       │ (Hot Path — OLAP Warehousing)                                     │ (Cold Path — Big Data Lake)
+                       ▼                                                                   ▼
+┌──────────────────────────────────────────────┐                   ┌──────────────────────────────────────────────┐
+│           PostgreSQL 15 (Warehouse)          │                   │          AWS S3 / MinIO (Data Lake)          │
+│           Database: foodingo_warehouse       │                   │          Bucket: foodingo-data-lake          │
+│                                              │                   │                                              │
+│  ┌─ raw Schema (append-only events) ───────┐ │                   │  s3://foodingo-data-lake/raw/events/         │
+│  │ • user_events      • cart_events        │ │                   │    ├── order/created/year=2026/month=07/...  │
+│  │ • order_events     • cdc_events         │ │                   │    └── foodingo/foodies/orders/...           │
+│  └───────────────────┬─────────────────────┘ │                   │  (Hive-style date/hour partitioned parquet)  │
+│                      │                       │                   └───────────────────────┬──────────────────────┘
+│                      │ [dbt run — 2 AM]      │                                           │
+│                      ▼                       │                                           │
+│  ┌─ analytics Schema (dimensional marts) ──┐ │                                           │
+│  │ • stg_* (Views)    • fact_* (Tables)    │ │                                           │ [s3a:// Parquet scan]
+│  │ • daily_revenue    • food_popularity    │ │                                           │ (hadoop-aws 3.3.4)
+│  │ • cart_abandonment • user_funnel        │ │                                           ▼
+│  │ • ml_user_order_matrix                  │ │                   ┌──────────────────────────────────────────────┐
+│  └───────────────────┬─────────────────────┘ │                   │             Apache Spark Cluster             │
+│                      │                       │                   │        Container: foodingo-spark-jupyter     │
+│                      │                       │                   │        Mode: local[*] multi-core             │
+│                      │                       │                   │                                              │
+│                      │                       │                   │  • Distributed Big Data compute & aggregations │
+│                      │                       │                   │  • Bypasses PostgreSQL (zero DB load)        │
+│                      │                       │                   └───────────────────────┬──────────────────────┘
+│                      │                       │                                           │
+│                      │                       │   [JDBC write-back summary]               │ [Pivots ML user matrix]
+└──────────────────────┼───────────────────────┴───────────────────────────────────────────┼──────────────────────┘
+                       │                                                                   │
+         ┌─────────────┴─────────────┐                                                     │
+         │ [JDBC SQL READ]           │ [SQL SELECT / training]                             ▼
+         ▼                           │                             ┌──────────────────────────────────────────────┐
+┌─────────────────┐                  └────────────────────────────►│           FastAPI ML Service (:5001)         │
+│ Metabase (:3000)│                                                │                                              │
+│ BI Dashboards   │◄───────────────────────────────────────────────┤  • Item-Item Cosine Similarity Recommender   │
+│ CEO Executive UI│       [REST HTTP GET /recommend/{id} < 10ms]   │  • Logistic Regression Churn Classifier      │
+└─────────────────┘                                                │  • Persisted in RAM via joblib (/tmp/*.pkl)  │
+                                                                   └───────────────────────▲──────────────────────┘
+                                                                                           │
+                                                                                           │ [HTTP POST /train/* — 2 AM]
+                                                                   ┌───────────────────────┴──────────────────────┘
+                                                                   │            Apache Airflow (:8089)
+                                                                   │      Master DAG: foodingo_daily_pipeline
+                                                                   └──────────────────────────────────────────────
 ```
 
 ---
 
-## 🧠 The Lambda Architecture (PostgreSQL vs Apache Spark)
+## 📈 Master Scalability Roadmap
 
-Foodingo implements a **Lambda Architecture** to handle both operational reporting and massive Big Data compute without ever slowing down the live application.
+When Foodingo scales from thousands to millions of daily orders, follow this component-by-component scaling guide:
 
-1. **The Application Database (MongoDB):** 
-   This is the live database powering the Spring Boot backend. It is purely for real-time CRUD operations.
-   
-2. **The "Hot Path" (PostgreSQL + dbt):** 
-   PostgreSQL acts as the analytical data warehouse. It is incredibly fast for everyday business intelligence (Metabase dashboards on gigabytes of data). However, as a single-node server, it has a hard limit on how much data it can process quickly.
-   
-3. **The "Cold/Big Data Path" (MinIO S3 + Apache Spark):** 
-   If Foodingo grows to **billions of rows** (Terabytes of data), a single PostgreSQL server will choke. To solve this, the Kafka Consumer constantly backs up all events as compressed **Apache Parquet files** into the MinIO (S3) Data Lake. 
-   When data scientists need to process these billions of rows, they use **Apache Spark**. Spark is a *distributed compute engine* (with no hard drive of its own). It reads the raw data directly from the S3 data lake and spreads the math across multiple worker nodes in memory, completely bypassing PostgreSQL. This guarantees that massive machine learning jobs never slow down your daily operations!
+| Component | Current Configuration | Capacity / Bottleneck | Step 1: Intermediate Scaling | Step 2: Enterprise Big Data Scaling |
+|---|---|---|---|---|
+| **Apache Kafka** | 1 Broker, 13 Topics, 3 Partitions per topic (`replication-factor: 1`) | ~50,000 msgs/sec | Increase partitions per topic from `3` to `6` | Deploy a 3-broker cluster, set `replication-factor: 3`, migrate to KRaft mode (Zookeeper-free) |
+| **Debezium CDC** | 1 Connect Worker container, 1 task monitoring 4 collections | ~5,000 mutations/sec | Set `"tasks.max": "4"` in JSON config for collection-level parallelism | Deploy a distributed Kafka Connect cluster (3+ workers) with Avro Schema Registry |
+| **MongoDB** | Replica Set (`rs0`) with 1 member, WiredTiger engine | ~50,000 writes/sec | Add 2 Secondary read-replicas (`rs.initiate()`) for automatic primary failover | Shard `foodies.orders` by `userId (hashed)` across multiple shard replica sets |
+| **Kafka Consumer** | 1 Python container instance reading 39 partitions | 100 events/sec per container | Scale to 3 instances (`docker compose up --scale kafka-consumer=3`) | Replace Python consumer with **Apache Flink** or **Spark Streaming** for exactly-once ETL |
+| **PostgreSQL** | Single instance, `raw` + `analytics` schemas | ~100 GB relational limit | Add **PgBouncer** connection pooler; partition `raw.order_events` by month | Provision a dedicated PostgreSQL Read-Replica for Metabase BI dashboards |
+| **MinIO / AWS S3** | `foodingo-data-lake` bucket, Hive-partitioned Parquet files | Infinite storage scale | Implement Airflow daily **Small File Compaction** PySpark job | Set S3 Lifecycle Rules: move >30 day logs to S3 Infrequent Access, >90 days to Glacier |
+| **Apache Spark** | `local[*]` mode in single Jupyter Docker container | Multi-core host RAM limit | Migrate to Spark Standalone Cluster (Master + Worker containers) | Submit serverless PySpark jobs to **AWS EMR** or **GCP Dataproc** clusters |
+| **dbt** | `threads: 2`, Table & View materializations | Full table rebuilds take time | Convert `fact_orders` to **Incremental Model** (`materialized='incremental'`) | Increase `threads: 8`; implement built-in data quality tests (`unique`, `not_null`) |
+| **Apache Airflow** | `LocalExecutor`, 30s scheduler loop, Postgres metadata | Subprocess CPU/RAM limits | Switch to **`CeleryExecutor`** with Redis message broker and worker nodes | Upgrade to **`KubernetesExecutor`** on EKS/GKE (auto-spawns ephemeral task pods) |
+| **ML Service** | 1 Uvicorn worker process, `/tmp/*.pkl` RAM joblib loading | 1 Host CPU core | Run `gunicorn` with 4 Uvicorn worker processes (`--workers 4`) | Migrate model inference to **Redis Shared Memory** or **AWS SageMaker Endpoints** |
+| **Metabase BI** | Direct JDBC connection to primary PostgreSQL DB | Concurrent BI queries slow DB | Point Metabase JDBC to a PostgreSQL Read-Replica; set Cache TTL to 24h | Embed JWT-secured interactive dashboards in React frontend (`Embedded BI`) |
 
 ---
 
@@ -134,7 +150,7 @@ Foodingo implements a **Lambda Architecture** to handle both operational reporti
 | **Kafka Connect** | Debezium 2.5 | Connector framework for CDC |
 | **Python Kafka Consumer** | kafka-python | Event consumption + ETL |
 | **PostgreSQL** | 15-alpine | Analytical data warehouse (Hot Path) |
-| **MinIO** | latest | S3-compatible data lake (Cold Path) |
+| **MinIO / AWS S3** | latest / S3 API | S3-compatible data lake (Cold Path) |
 | **Apache Spark** | 3.5.1 | Big Data distributed analytics on MinIO |
 | **Jupyter** | PySpark 3.5 | Interactive data lake querying UI |
 | **Apache Airflow** | 2.9.1 | Workflow orchestration (DAGs) |
@@ -142,13 +158,6 @@ Foodingo implements a **Lambda Architecture** to handle both operational reporti
 | **FastAPI** | latest | ML model serving API |
 | **scikit-learn** | latest | ML: Collaborative Filtering, Logistic Regression |
 | **Metabase** | latest | Business Intelligence dashboards |
-
-### Infrastructure
-| Technology | Purpose |
-|---|---|
-| **Docker & Docker Compose** | Container orchestration |
-| **MongoDB** | 7.0 with Replica Set for CDC |
-| **Maven** | 3.8.5 for Java builds |
 
 ---
 
@@ -172,395 +181,223 @@ foodingo-main/
 ├── .env                          # 🔐 Environment variables (MongoDB URI, JWT, AWS, Kafka)
 ├── pom.xml                       # 📦 Maven dependencies
 ├── Dockerfile                    # 🐳 Multi-stage Spring Boot Docker image
-│
 ├── docker-compose-pipeline.yml   # 🐳 Full 14-service data pipeline orchestration
 │
-├── kafka/                        # 📨 Kafka topic initialization
-│   └── init-topics.sh            #    Creates 13 topics on startup
-│
-├── debezium/                     # 🔄 Change Data Capture configuration
-│   └── mongodb-connector.json    #    Debezium MongoDB connector config
-│
-├── mongodb/                      # 🍃 MongoDB replica set initialization
-│   └── init-replica-set.js       #    Initializes rs0 replica set for CDC
-│
-├── kafka-consumer/               # 🐍 Python Kafka Consumer (ETL)
-│   ├── consumer.py               #    Consumes Kafka → writes PostgreSQL + MinIO
-│   ├── Dockerfile                #    Consumer Docker image
-│   └── requirements.txt          #    Python dependencies
-│
-├── postgres/                     # 🐘 PostgreSQL Data Warehouse
-│   └── init.sql                  #    Creates raw + analytics schemas (8 tables)
-│
-├── minio/                        # 📦 MinIO (S3-compatible) Data Lake
-│   └── init-buckets.sh           #    Creates foodingo-data-lake bucket
-│
-├── dbt/                          # 🔧 dbt Data Transformations
-│   ├── dbt_project.yml           #    Project configuration
-│   ├── profiles.yml              #    PostgreSQL connection profile
-│   └── models/
-│       ├── staging/              #    3 view models (dedup + clean)
-│       ├── facts/                #    2 table models (fact_orders, fact_cart_events)
-│       └── marts/                #    5 table models (revenue, popularity, churn, funnel, ML matrix)
-│
-├── airflow/                      # 🌀 Apache Airflow DAGs
-│   └── dags/
-│       ├── foodingo_daily_pipeline.py   # Daily: dbt staging→facts→marts→ML retrain
-│       └── foodingo_ml_retrain.py       # ML model retraining DAG
-│
-├── ml-service/                   # 🧠 FastAPI Machine Learning Service
-│   ├── app.py                    #    FastAPI application (5 endpoints)
-│   ├── recommender.py            #    Collaborative Filtering (Cosine Similarity)
-│   ├── churn_predictor.py        #    Logistic Regression (Cart Abandonment)
-│   ├── Dockerfile                #    ML service Docker image
-│   └── requirements.txt          #    Python ML dependencies
-│
-├── metabase/                     # 📊 Metabase BI Dashboard
-│   └── README.md                 #    Dashboard setup guide
-│
-├── architecture.md               # 📐 Detailed architecture documentation
-└── atlas-backup/                 # 💾 MongoDB Atlas → local migration scripts
+├── kafka/                        # 📨 Kafka topic initialization (init-topics.sh)
+├── debezium/                     # 🔄 Change Data Capture configuration (mongodb-connector.json)
+├── mongodb/                      # 🍃 MongoDB replica set initialization (init-replica-set.js)
+├── kafka-consumer/               # 🐍 Python Kafka Consumer ETL service (consumer.py)
+├── postgres/                     # 🐘 PostgreSQL Data Warehouse schemas & indexes (init.sql)
+├── minio/                        # 📦 MinIO / S3 bucket initialization (init-buckets.sh)
+├── spark/                        # ⚡ Apache Spark scripts (data_lake_analyzer.py)
+├── dbt/                          # 🔧 dbt SQL transformations (staging/facts/marts)
+├── airflow/                      # 🌀 Apache Airflow DAGs (foodingo_daily_pipeline.py)
+├── ml-service/                   # 🧠 FastAPI Machine Learning Service (recommender / churn)
+├── metabase/                     # 📊 Metabase BI Executive Dashboards
+└── architecture.md               # 📐 Extended architectural diagrams
 ```
 
 ---
 
-## 🌊 Data Flow — The 7 Stages
+## 🌊 Data Flow — The 7 Stages (Hot Path vs. Cold Path)
+
+Foodingo implements a true **Lambda Architecture**, ensuring that real-time transactional operations, interactive executive dashboards, and heavy Big Data machine learning jobs operate without interfering with one another.
 
 ### Stage 1: Event Generation (Spring Boot → Kafka)
-
-When a user interacts with the Foodingo app (registers, adds to cart, places an order), the Spring Boot backend **publishes real-time events** to Apache Kafka topics.
-
-**How it works at the code level:**
-- `KafkaPublishingService.java` is a safety wrapper around Spring's `KafkaTemplate`.
-- It uses **fire-and-forget async publishing** — if Kafka is down, the main app still works.
-- Each service (`OrderServiceImpl`, `CartServiceImpl`, `UserServiceImpl`) calls `kafkaPublishingService.publish(topic, key, event)`.
-- Events are serialized to JSON using Spring's `JsonSerializer`.
-- Spring Boot connects to Kafka on port **9094** (external listener).
-
-**Topics produced by Spring Boot (9 topics):**
-| Topic | Triggered When |
-|---|---|
-| `user.registered` | New user signs up |
-| `user.login` | User logs in |
-| `cart.item_added` | Item added to cart |
-| `cart.item_removed` | Item removed from cart |
-| `cart.cleared` | Cart emptied |
-| `cart.item_deleted` | Single item deleted |
-| `order.created` | Order placed (pre-payment) |
-| `payment.verified` | Razorpay payment confirmed |
-| `order.status_updated` | Order status changed |
+When a user interacts with the app, `KafkaPublishingService.java` asynchronously publishes JSON events to 9 specific Kafka topics (`order.created`, `cart.item_added`, etc.) over port `9094`.
 
 ### Stage 2: Change Data Capture (MongoDB → Debezium → Kafka)
+Simultaneously, Debezium tails MongoDB's Replica Set (`rs0`) oplog and streams raw database inserts, updates, and deletes to 4 Kafka topics (`foodingo.foodies.orders`, etc.).
 
-In parallel to the application events, **Debezium** watches MongoDB for any direct database changes (inserts, updates, deletes) and streams them to Kafka.
+### Stage 3: Real-Time Dual-Write Ingestion (Kafka Consumer)
+A Python ETL service (`consumer.py`) polls all 13 topics and splits the stream:
+- **The Hot Path (PostgreSQL):** Inserts structured rows into `raw.order_events`, `raw.cart_events`, etc., for sub-second SQL queries.
+- **The Cold Path (S3 / MinIO Parquet):** Converts JSON into columnar **Apache Parquet** files and uploads to `s3://foodingo-data-lake/` using Hive date partitioning (`year=2026/month=07/day=24/`).
 
-**How it works:**
-- MongoDB runs as a **Replica Set** (`rs0`) — required for Change Streams.
-- Debezium's MongoDB connector uses `change_streams_update_full` capture mode.
-- It watches 4 collections: `foodies.orders`, `foodies.users`, `foodies.food`, `foodies.carts`.
-- Changes are published to Kafka topics prefixed with `foodingo.foodies.*`.
+### Stage 4: Dimensional Data Modeling (dbt)
+dbt transforms messy `raw` ingestion tables into clean, business-ready star-schema tables in the `analytics` schema:
+- **Staging Views:** Deduplicates retried events (`stg_orders`, `stg_cart`).
+- **Fact Tables:** Immutable historical records (`fact_orders`, `fact_cart_events`).
+- **Mart Tables:** Pre-computed BI summaries (`daily_revenue`, `food_popularity`, `cart_abandonment`). Notice that `food_popularity` uses PostgreSQL's native `jsonb_array_elements()` to explode nested order items into individual rows!
 
-**Topics produced by Debezium (4 topics):**
-| Topic | MongoDB Collection |
-|---|---|
-| `foodingo.foodies.orders` | Orders collection |
-| `foodingo.foodies.users` | Users collection |
-| `foodingo.foodies.food` | Food items collection |
-| `foodingo.foodies.carts` | Cart collection |
+### Stage 5: Master Pipeline Orchestration (Apache Airflow)
+Every night at **2:00 AM IST**, Apache Airflow executes `foodingo_daily_pipeline.py`:
+1. Triggers `dbt run --select staging/facts/marts`.
+2. Runs built-in data quality tests (`dbt test`).
+3. Triggers historical **Apache Spark** jobs for heavy Data Lake aggregations.
+4. Triggers HTTP `POST` requests to the ML Service to retrain AI algorithms.
 
-### Stage 3: Kafka Consumer (Kafka → PostgreSQL + MinIO)
+### Stage 6: Artificial Intelligence & Recommender Engine (FastAPI ML Service)
+The ML microservice (`ml-service`) provides two algorithms:
+- **Food Recommender (Item-Item Collaborative Filtering):** Reads `analytics.ml_user_order_matrix` (or Spark Data Lake matrices), computes Cosine Similarity across food items, and caches the sparse matrix in RAM (`/tmp/recommender_model.pkl`). When Spring Boot requests `GET /recommend/{id}`, it responds in **< 10 milliseconds**.
+- **Churn Predictor (Logistic Regression):** Evaluates shopping cart abandonment risk (`0.0` to `1.0`) to help marketing teams trigger discount coupon recovery emails.
 
-A **Python consumer** (`consumer.py`) subscribes to all 13 Kafka topics and performs dual writes:
-
-1. **PostgreSQL (raw schema):** Writes structured rows to 4 raw tables (`raw.user_events`, `raw.cart_events`, `raw.order_events`, `raw.cdc_events`).
-2. **MinIO/S3 (Parquet):** Converts events to columnar Parquet format and uploads to `foodingo-data-lake` bucket, partitioned by `year/month/day/hour`.
-
-**Why dual-write?**
-- PostgreSQL is optimized for **fast SQL queries** (used by dbt and Metabase).
-- Parquet on S3 is optimized for **long-term archival** and big data tools like Spark.
-
-### Stage 4: dbt Data Transformations (raw → analytics)
-
-**dbt (Data Build Tool)** transforms the raw event data into clean, business-ready analytics tables using a 3-layer architecture:
-
-| Layer | Model Count | Materialization | Purpose |
-|---|---|---|---|
-| **Staging** | 3 views | `VIEW` | Deduplication, type casting, filtering |
-| **Facts** | 2 tables | `TABLE` | Core business facts (orders, cart events) |
-| **Marts** | 5 tables | `TABLE` | Business-specific aggregations |
-
-**The 10 dbt Models:**
-| Model | Layer | What It Does |
-|---|---|---|
-| `stg_orders` | Staging | Deduplicates raw orders by `(order_id, event_type)` |
-| `stg_cart` | Staging | Cleans raw cart events |
-| `stg_users` | Staging | Cleans raw user events |
-| `fact_orders` | Facts | One row per paid order with item count, order hour |
-| `fact_cart_events` | Facts | Cleaned cart interactions with date/hour extraction |
-| `daily_revenue` | Marts | Daily revenue, order count, avg order value |
-| `food_popularity` | Marts | Per-food-item order count and revenue |
-| `cart_abandonment` | Marts | Users who added to cart but didn't order |
-| `user_funnel` | Marts | Daily conversion funnel (register→login→cart→order) |
-| `ml_user_order_matrix` | Marts | User×Food order count matrix for ML |
-
-### Stage 5: Airflow Orchestration (Automating Spark & dbt)
-
-Apache Airflow runs the `foodingo_daily_pipeline` DAG **every day at 2:00 AM IST** (20:30 UTC). This is the "brain" that runs all background tasks while the CEO is sleeping.
-
-**DAG Task Chain:**
-```
-dbt_run_staging → dbt_run_facts → dbt_run_marts → trigger_spark_job → retrain_ml_models
-```
-*Note: The `trigger_spark_job` step spins up the Apache Spark cluster, points it to the S3 Data Lake, crunches the billions of rows of historical data, and prepares the heavy matrix calculations for the Machine Learning models.*
-
-### Stage 6: Machine Learning Service (Trained by Spark)
-
-The FastAPI ML service provides two AI models that rely on the heavy lifting done by Apache Spark:
-
-1. **Food Recommender** (Collaborative Filtering with Cosine Similarity)
-   - **Trained by Spark**: Spark crunches years of historical data from the S3 Data Lake to generate the `analytics.ml_user_order_matrix`.
-   - Builds an item-item similarity matrix
-   - For known users: recommends foods similar to what they've ordered
-   - For new users: returns the top-10 most popular foods (cold-start fallback)
-   - Saves model as `/tmp/recommender_model.pkl` inside the container
-
-2. **Churn Predictor** (Logistic Regression)
-   - Reads `analytics.cart_abandonment` data
-   - Features: `days_since_cart`, `cart_item_count`, `has_ordered_after`
-   - Output: probability (0–1) of abandonment + risk label (low/medium/high)
-   - Provides actionable recommendation (e.g., "Send recovery email with discount")
-
-### Stage 7: Business Intelligence (Metabase)
-
-Metabase connects directly to the PostgreSQL `analytics` schema and provides:
-- Interactive dashboards and charts
-- SQL query builder
-- Automated email reports
-- Self-service analytics for non-technical stakeholders
+### Stage 7: Executive BI Dashboards (Metabase)
+Metabase connects via JDBC to PostgreSQL's `analytics` schema. Executives view interactive charts (`Daily Revenue`, `Food Popularity`, `Customer Funnels`) in real-time. Even when analyzing 5-year historical trends, queries run in milliseconds because Apache Spark pre-computed and wrote the summary tables back to Postgres overnight!
 
 ---
 
-## 🔗 How Services Interact
+## 🔗 How Services Interact (Data Types & Protocols)
 
 ```
 Spring Boot (:8080)
     │
-    ├──[MongoDB]──▶ MongoDB (:27017) ──[CDC]──▶ Debezium ──▶ Kafka
+    ├──[BSON / Wire Protocol]──▶ MongoDB (:27017) ──[Change Stream oplog]──▶ Debezium ──▶ Kafka
     │
-    ├──[Kafka Producer]──▶ Kafka (:9094 external / :9092 internal)
-    │                           │
-    │                           ▼
-    │                     Python Consumer ──┬──▶ PostgreSQL (:5432)
-    │                                      └──▶ MinIO (:9000)
+    ├──[JSON over TCP]──▶ Kafka Broker (:9094 External / :9092 Internal)
+    │                         │
+    │                         ▼
+    │                   Python Kafka Consumer ──┬──[SQL INSERT]──▶ PostgreSQL (:5432)
+    │                                           └──[boto3 Parquet]─▶ AWS S3 / MinIO (:9000)
+    │                                                                   │
+    │                                                                   ▼
+    │                   Apache Spark (:8888) ◄──[s3a:// Parquet scan]───┘
+    │                         │
+    │                         └──[JDBC Summary Write]──▶ PostgreSQL (:5432)
     │
-    ├──[HTTP GET]──▶ ML Service (:5001) ──[SQL]──▶ PostgreSQL
+    ├──[HTTP GET /recommend/{id}]──▶ FastAPI ML Service (:5001) ──[SQL SELECT]──▶ PostgreSQL
     │
     └──[Swagger UI]──▶ http://localhost:8080/swagger-ui.html
 
-Airflow (:8089) ──[BashOperator]──▶ dbt ──[SQL]──▶ PostgreSQL
-                 ──[HTTP POST]──▶ ML Service (:5001/train/recommender)
+Apache Airflow (:8089)
+    │
+    ├──[BashOperator / dbt CLI]──▶ dbt ──[SQL DDL/SELECT]──▶ PostgreSQL (:5432)
+    ├──[BashOperator / PySpark]──▶ Apache Spark Container (:8888)
+    └──[SimpleHttpOperator]──────▶ FastAPI ML Service (POST :5001/train/recommender)
 
-Metabase (:3000) ──[SQL]──▶ PostgreSQL (analytics schema)
-
-Kafka UI (:8090) ──[Admin]──▶ Kafka (view topics, messages, consumer groups)
-
-MinIO Console (:9001) ──[Admin]──▶ MinIO (view Parquet files in data lake)
+Metabase (:3000) ──[JDBC SQL Read]──▶ PostgreSQL (analytics Schema)
 ```
 
 ---
 
-## ✅ Prerequisites
+## ✅ Prerequisites & Quick Start
 
+### Prerequisites
 - **Docker Desktop** (4.0+) with at least **6 GB RAM** allocated
-- **Java 17** or later (for running Spring Boot locally)
+- **Java 17+** (if running Spring Boot outside Docker)
 - **Maven 3.8+** (included via `./mvnw` wrapper)
-- **Node.js 18+** (only if running the React frontend)
 
----
-
-## 🚀 Quick Start
-
-### Step 1: Clone and Configure
+### Quick Start (Start the Full 14-Service Pipeline)
 
 ```bash
-git clone https://github.com/your-repo/foodingo-main.git
-cd foodingo-main
-```
-
-Copy `.env.example` to `.env` and fill in your credentials (MongoDB URI, JWT secret, AWS keys, Razorpay keys).
-
-### Step 2: Start the Data Pipeline (Docker Compose)
-
-```bash
+# 1. Start all infrastructure, database, streaming, ETL, and BI containers
 docker compose -f docker-compose-pipeline.yml --env-file .env up -d
-```
 
-This boots **14 containers** in dependency order. Wait ~2 minutes for everything to be healthy.
-
-### Step 3: Verify All Services Are Running
-
-```bash
+# 2. Check container health (Wait until all containers show healthy / Up)
 docker compose -f docker-compose-pipeline.yml ps
-```
 
-All containers should show `Up` or `Healthy` status.
-
-### Step 4: Start the Spring Boot Backend
-
-```bash
-# Load environment variables
-source .env
-
-# Run the application
-./mvnw spring-boot:run
-```
-
-The backend starts on `http://localhost:8080`.
-
-### Step 5: Test the API
-
-Open Swagger UI: **http://localhost:8080/swagger-ui.html**
-
-1. Register a user via `POST /api/user/register`
-2. Login via `POST /api/user/login` (copy the JWT token)
-3. Add items to cart via `POST /api/cart`
-4. Place an order via `POST /api/orders`
-
-### Step 6: Run the dbt Pipeline
-
-Either wait for Airflow to run at 2 AM IST, or trigger manually:
-
-```bash
-docker exec -i foodingo-airflow-webserver bash -c \
-  "POSTGRES_HOST=postgres POSTGRES_PORT=5432 POSTGRES_DB=foodingo_warehouse \
-   POSTGRES_USER=foodingo POSTGRES_PASSWORD=foodingo123 \
-   dbt run --profiles-dir /opt/airflow/dbt --project-dir /opt/airflow/dbt"
-```
-
-### Step 7: Check Your Analytics
-
-```bash
-docker exec -i foodingo-postgres psql -U foodingo -d foodingo_warehouse -c \
-  "SELECT * FROM analytics.fact_orders;"
+# 3. Follow logs of the Python Kafka Consumer to watch real-time ingestion
+docker logs -f foodingo-kafka-consumer
 ```
 
 ---
 
 ## 🔐 Environment Variables
 
-| Variable | Description | Example |
-|---|---|---|
-| `MONGODB_URI` | MongoDB connection string | `mongodb://localhost:27017/foodies?replicaSet=rs0` |
-| `JWT_SECRET` | JWT signing key (min 32 chars) | `your-secret-key-here` |
-| `AWS_ACCESS_KEY` | AWS S3 access key | `AKIA...` |
-| `AWS_SECRET_KEY` | AWS S3 secret key | `U9ti...` |
-| `AWS_S3_BUCKET` | Food images S3 bucket | `tapesh-myfood-images` |
-| `AWS_REGION` | AWS region for images | `eu-north-1` |
-| `RAZORPAY_KEY` | Razorpay API key | `rzp_test_...` |
-| `RAZORPAY_SECRET` | Razorpay API secret | `OFLTu...` |
-| `KAFKA_BOOTSTRAP_SERVERS` | Kafka broker address | `localhost:9094` |
-| `ML_SERVICE_URL` | ML service URL | `http://localhost:5001` |
-| `AWS_DATALAKE_BUCKET` | Data lake S3 bucket | `foodingo-data-lake` |
+The pipeline reads configuration from `.env` in the project root:
+
+```ini
+# MongoDB & Application
+MONGODB_URI=mongodb://localhost:27017/foodies?replicaSet=rs0&directConnection=true
+JWT_SECRET=YourSuperSecretKeyForJWTAuthentication2026!
+
+# AWS S3 Data Lake (Or local MinIO credentials)
+AWS_ACCESS_KEY_ID=minioadmin
+AWS_SECRET_ACCESS_KEY=minioadmin
+AWS_DATALAKE_BUCKET=foodingo-data-lake
+AWS_DATALAKE_REGION=us-east-1
+
+# PostgreSQL Data Warehouse
+POSTGRES_USER=foodingo
+POSTGRES_PASSWORD=foodingo123
+POSTGRES_DB=foodingo_warehouse
+```
 
 ---
 
 ## 🌐 Service Ports & Dashboards
 
-| Service | Port | URL |
-|---|---|---|
-| Spring Boot API | 8080 | http://localhost:8080 |
-| Swagger UI | 8080 | http://localhost:8080/swagger-ui.html |
-| Kafka UI | 8090 | http://localhost:8090 |
-| Schema Registry | 8081 | http://localhost:8081 |
-| Kafka Connect | 8083 | http://localhost:8083 |
-| Airflow | 8089 | http://localhost:8089 (admin/admin) |
-| ML Service (FastAPI) | 5001 | http://localhost:5001/docs |
-| Metabase | 3000 | http://localhost:3000 |
-| MinIO Console | 9001 | http://localhost:9001 (foodingo/foodingo123) |
-| MinIO API | 9000 | http://localhost:9000 |
-| PostgreSQL | 5432 | `psql -U foodingo -d foodingo_warehouse` |
-| MongoDB | 27017 | `mongosh localhost:27017` |
-| Kafka (internal) | 9092 | Used by Docker services |
-| Kafka (external) | 9094 | Used by Spring Boot on host |
+| Service | Port | Dashboard / Endpoint | Login Credentials |
+|---|---|---|---|
+| **Spring Boot API** | `8080` | `http://localhost:8080/swagger-ui.html` | — |
+| **Metabase BI** | `3000` | `http://localhost:3000` | Setup on first visit |
+| **Apache Airflow** | `8089` | `http://localhost:8089` | `admin` / `admin` |
+| **Kafka UI** | `8090` | `http://localhost:8090` | — |
+| **MinIO Console** | `9001` | `http://localhost:9001` | `foodingo` / `foodingo123` |
+| **Spark JupyterLab**| `8888` | `http://localhost:8888` | Token: `foodingo123` |
+| **FastAPI ML Service**| `5001` | `http://localhost:5001/docs` | — |
+| **PostgreSQL** | `5432` | `localhost:5432/foodingo_warehouse` | `foodingo` / `foodingo123` |
+| **MongoDB Replica Set**| `27017`| `mongodb://localhost:27017/foodies` | — |
 
 ---
 
 ## 🧪 Testing the Full Pipeline
 
-### End-to-End Test Walkthrough
-
-1. **Register + Login** via Swagger UI → check Kafka UI for `user.registered` topic
-2. **Add to Cart** → check `cart.item_added` topic in Kafka UI
-3. **Place Order** → check `order.created` topic
-4. **Verify PostgreSQL raw data:**
+1. **Place a Test Order via Swagger UI:**
+   - Open **http://localhost:8080/swagger-ui.html**.
+   - Authenticate and submit an order via `POST /api/orders`.
+2. **Verify Real-Time Kafka Ingestion:**
+   - Open Kafka UI (**http://localhost:8090**) and inspect messages under topic **`order.created`** and **`foodingo.foodies.orders`**.
+3. **Verify PostgreSQL Raw Event Ingestion:**
    ```bash
    docker exec -i foodingo-postgres psql -U foodingo -d foodingo_warehouse -c \
-     "SELECT count(*) FROM raw.order_events;"
+     "SELECT order_id, amount, event_timestamp FROM raw.order_events ORDER BY ingested_at DESC LIMIT 5;"
    ```
-5. **Trigger Airflow DAG** → click Play on `foodingo_daily_pipeline` in Airflow UI
-6. **Check analytics tables:**
+4. **Trigger Nightly Airflow Pipeline Manually:**
+   - Open Airflow (**http://localhost:8089**) → select **`foodingo_daily_pipeline`** → click **▶ Trigger DAG**.
+5. **Verify Clean dbt Analytics Tables:**
    ```bash
    docker exec -i foodingo-postgres psql -U foodingo -d foodingo_warehouse -c \
-     "SELECT * FROM analytics.fact_orders;"
+     "SELECT * FROM analytics.fact_orders LIMIT 5;"
    ```
-7. **Train ML model:**
-   ```bash
-   curl -X POST http://localhost:5001/train/recommender
-   ```
-8. **Get recommendations:**
+6. **Verify Real-Time ML Recommendation Response (< 10 ms):**
    ```bash
    curl http://localhost:5001/recommend/YOUR_USER_ID
    ```
-9. **Open Metabase** at http://localhost:3000 and create dashboards
+7. **Run PySpark Data Lake Analysis on S3 Parquet Logs:**
+   ```bash
+   docker exec -it foodingo-spark-jupyter python /home/jovyan/work/spark/data_lake_analyzer.py
+   ```
 
 ---
 
 ## 🔧 Troubleshooting
 
-### Kafka won't start (`NodeExistsException`)
-This happens when Docker Desktop is restarted and Zookeeper has stale session data.
+### Kafka Won't Start (`NodeExistsException`)
+Occurs when Docker Desktop is restarted and Zookeeper retains stale volume session state:
 ```bash
 docker compose -f docker-compose-pipeline.yml rm -sf zookeeper kafka
 docker compose -f docker-compose-pipeline.yml --env-file .env up -d
 ```
 
-### Airflow dbt tasks fail
-Ensure the Airflow containers have dbt installed and the dbt directory mounted:
-```yaml
-# docker-compose-pipeline.yml — airflow-scheduler/webserver
-_PIP_ADDITIONAL_REQUIREMENTS: "dbt-postgres==1.7.9"
-volumes:
-  - ./dbt:/opt/airflow/dbt
-```
-
-### Analytics tables are empty
-Run dbt manually to verify:
+### Airflow dbt Tasks Fail
+Ensure `dbt-postgres` is installed inside Airflow containers (configured automatically via docker-compose):
 ```bash
-docker exec -i foodingo-airflow-webserver bash -c \
-  "POSTGRES_HOST=postgres dbt run --profiles-dir /opt/airflow/dbt --project-dir /opt/airflow/dbt"
+docker exec -it foodingo-airflow-webserver dbt --version
 ```
 
 ---
 
 ## 📚 Component Deep-Dive READMEs
 
-Each component has its own detailed README with deep technical explanations:
+Every component in the Foodingo pipeline has an exhaustive, standalone technical README detailing its internal workings, component interaction flows, configurations, and scaling guides:
 
-| Component | README |
-|---|---|
-| Kafka (Event Streaming) | [kafka/README.md](kafka/README.md) |
-| Debezium (CDC) | [debezium/README.md](debezium/README.md) |
-| MongoDB (Replica Set) | [mongodb/README.md](mongodb/README.md) |
-| Kafka Consumer (ETL) | [kafka-consumer/README.md](kafka-consumer/README.md) |
-| PostgreSQL (Warehouse) | [postgres/README.md](postgres/README.md) |
-| MinIO (Data Lake) | [minio/README.md](minio/README.md) |
-| dbt (Transformations) | [dbt/README.md](dbt/README.md) |
-| Airflow (Orchestration) | [airflow/README.md](airflow/README.md) |
-| ML Service (FastAPI) | [ml-service/README.md](ml-service/README.md) |
-| Metabase (BI) | [metabase/README.md](metabase/README.md) |
+| Component | README File | Core Focus Area |
+|---|---|---|
+| **Apache Kafka** | [kafka/README.md](kafka/README.md) | Event Streaming, Commit Logs, 13 Topics & 3 Partitions |
+| **Debezium CDC** | [debezium/README.md](debezium/README.md) | MongoDB Change Streams, Oplog Tailing, Envelopes |
+| **MongoDB** | [mongodb/README.md](mongodb/README.md) | Replica Set (`rs0`), WiredTiger, JSON Document Storage |
+| **Kafka Consumer** | [kafka-consumer/README.md](kafka-consumer/README.md) | Real-Time ETL, psycopg2 SQL Insert, Parquet Conversion |
+| **PostgreSQL** | [postgres/README.md](postgres/README.md) | Warehouse Schemas (`raw`/`analytics`), JSONB Indexing |
+| **MinIO / AWS S3** | [minio/README.md](minio/README.md) | Columnar Parquet, Hive-style Date/Hour Partitioning |
+| **Apache Spark** | [spark/README.md](spark/README.md) | Distributed Big Data, `s3a://` Protocol, Airflow Integration |
+| **dbt** | [dbt/README.md](dbt/README.md) | Jinja SQL Compilation, DAGs, JSONB Exploding (`marts`) |
+| **Apache Airflow**| [airflow/README.md](airflow/README.md) | Scheduler, `LocalExecutor`, Automated Nightly DAG Chain |
+| **ML Service** | [ml-service/README.md](ml-service/README.md) | Collaborative Filtering, Logistic Regression, RAM Inference |
+| **Metabase BI** | [metabase/README.md](metabase/README.md) | JDBC Warehousing, Caching, Embedded BI Dashboards |
 
 ---
 
 ## 📄 License
 
-This project is built for educational and portfolio purposes.
+This repository is developed for enterprise architecture demonstration, educational, and portfolio purposes.
