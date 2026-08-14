@@ -1,4 +1,4 @@
-# 🍕 Foodingo — Full-Stack Food Ordering Platform with Real-Time Lambda Data Engineering Pipeline
+ # 🍕 Foodingo — Full-Stack Food Ordering Platform with Real-Time Lambda Data Engineering Pipeline
 
 > A production-grade, enterprise-scale food ordering application built with **Spring Boot 3 + MongoDB 7** on the backend, a **React** frontend, and a **7-Stage Lambda Data Engineering Pipeline** powered by Apache Kafka, Debezium CDC, PostgreSQL, Apache Parquet / AWS S3 Data Lake, Apache Spark, dbt, Apache Airflow, a FastAPI ML Recommendation Engine, and Metabase BI Dashboards — fully orchestrated via Docker Compose.
 
